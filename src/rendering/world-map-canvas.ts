@@ -215,8 +215,8 @@ function drawRoads(
   connections: Array<[string, string]>
 ): void {
   ctx.strokeStyle = '#9a8868';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 3;
+  ctx.setLineDash([8, 5]);
   ctx.globalAlpha = 0.5;
 
   for (const [fromId, toId] of connections) {
@@ -266,54 +266,65 @@ function drawLocationMarkers(
         drawDefaultMarker(ctx, x, y);
     }
 
-    // Location name
-    ctx.fillStyle = '#3a3020';
-    ctx.font = 'bold 9px serif';
+    // Location name — large and readable
+    ctx.fillStyle = '#2a2010';
+    ctx.font = 'bold 14px serif';
     ctx.textAlign = 'center';
-    ctx.fillText(node.name, x, y + 16);
+    ctx.fillText(node.name, x + 1, y + 27);
+    ctx.fillStyle = '#4a3820';
+    ctx.fillText(node.name, x, y + 26);
     ctx.textAlign = 'left';
   }
 }
 
 function drawBattleMarker(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-  // Crossed swords icon
-  ctx.strokeStyle = '#6a3020';
+  // Large crossed swords icon
+  const r = 14;
   ctx.fillStyle = '#c84040';
-  ctx.lineWidth = 2;
-
-  // Circle background
-  ctx.beginPath();
-  ctx.arc(x, y, 7, 0, Math.PI * 2);
-  ctx.fill();
   ctx.strokeStyle = '#4a2018';
+  ctx.lineWidth = 2.5;
+
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
   ctx.stroke();
+
+  // Inner highlight
+  ctx.fillStyle = '#e06060';
+  ctx.beginPath();
+  ctx.arc(x - 2, y - 2, r * 0.6, 0, Math.PI * 2);
+  ctx.fill();
 
   // Cross
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(x - 3, y - 3);
-  ctx.lineTo(x + 3, y + 3);
-  ctx.moveTo(x + 3, y - 3);
-  ctx.lineTo(x - 3, y + 3);
+  ctx.moveTo(x - 6, y - 6);
+  ctx.lineTo(x + 6, y + 6);
+  ctx.moveTo(x + 6, y - 6);
+  ctx.lineTo(x - 6, y + 6);
   ctx.stroke();
 }
 
 function drawTownMarker(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-  // House icon
+  // Large house icon
   ctx.fillStyle = '#c8a050';
   ctx.strokeStyle = '#6a5030';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 2;
 
   // House body
-  ctx.fillRect(x - 5, y - 2, 10, 8);
-  ctx.strokeRect(x - 5, y - 2, 10, 8);
+  ctx.fillRect(x - 10, y - 3, 20, 14);
+  ctx.strokeRect(x - 10, y - 3, 20, 14);
+
+  // Door
+  ctx.fillStyle = '#6a5030';
+  ctx.fillRect(x - 3, y + 3, 6, 8);
 
   // Roof
   ctx.beginPath();
-  ctx.moveTo(x - 7, y - 2);
-  ctx.lineTo(x, y - 8);
-  ctx.lineTo(x + 7, y - 2);
+  ctx.moveTo(x - 13, y - 3);
+  ctx.lineTo(x, y - 15);
+  ctx.lineTo(x + 13, y - 3);
   ctx.closePath();
   ctx.fillStyle = '#a06030';
   ctx.fill();
@@ -321,21 +332,30 @@ function drawTownMarker(ctx: CanvasRenderingContext2D, x: number, y: number): vo
 }
 
 function drawEncounterMarker(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-  // Small dot
-  ctx.fillStyle = '#808060';
+  // Larger encounter dot with ring
+  ctx.fillStyle = '#908850';
+  ctx.beginPath();
+  ctx.arc(x, y, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#605840';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Inner dot
+  ctx.fillStyle = '#c0b070';
   ctx.beginPath();
   ctx.arc(x, y, 4, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = '#605840';
-  ctx.lineWidth = 1;
-  ctx.stroke();
 }
 
 function drawDefaultMarker(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   ctx.fillStyle = '#888';
   ctx.beginPath();
-  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.arc(x, y, 8, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 2;
+  ctx.stroke();
 }
 
 function drawMapBorder(ctx: CanvasRenderingContext2D, w: number, h: number): void {
@@ -408,21 +428,21 @@ function drawCompass(ctx: CanvasRenderingContext2D, w: number, h: number): void 
 
 function drawTitle(ctx: CanvasRenderingContext2D, w: number, _h: number): void {
   // Title banner
-  ctx.fillStyle = 'rgba(60, 50, 35, 0.7)';
-  const bannerW = 180;
-  const bannerH = 28;
+  ctx.fillStyle = 'rgba(60, 50, 35, 0.75)';
+  const bannerW = 240;
+  const bannerH = 36;
   const bx = w / 2 - bannerW / 2;
-  ctx.fillRect(bx, 16, bannerW, bannerH);
+  ctx.fillRect(bx, 14, bannerW, bannerH);
 
   // Border
   ctx.strokeStyle = '#8a7a58';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(bx, 16, bannerW, bannerH);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, 14, bannerW, bannerH);
 
   // Text
   ctx.fillStyle = '#d4c5a0';
-  ctx.font = 'bold 12px serif';
+  ctx.font = 'bold 18px serif';
   ctx.textAlign = 'center';
-  ctx.fillText('IVALICE', w / 2, 35);
+  ctx.fillText('IVALICE', w / 2, 39);
   ctx.textAlign = 'left';
 }
