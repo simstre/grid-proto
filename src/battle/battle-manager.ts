@@ -7,6 +7,7 @@ import { calculateDamage, calculateHitChance, type DamageInput, type WeaponCateg
 import { statusManager, type AppliedStatus, type StatusTickResult } from './status-effects';
 import type { ElementAffinityMap } from '@/data/elements';
 import type { ZodiacSign } from '@/data/zodiac';
+import { AIController } from './ai/ai-controller';
 
 import type { StatusId } from './status-effects';
 
@@ -207,8 +208,9 @@ export class BattleManager {
       this.calculateRanges(unit);
     } else {
       this.state.phase = 'ai_thinking';
-      // AI will be implemented later — for now, auto-wait
-      setTimeout(() => this.doAITurn(unit), 500);
+      // Random delay for visual pacing (300-800ms)
+      const aiDelay = 300 + Math.floor(Math.random() * 500);
+      setTimeout(() => this.doAITurn(unit), aiDelay);
     }
   }
 
@@ -440,10 +442,9 @@ export class BattleManager {
     }
   }
 
-  // ─── AI (placeholder) ───
+  // ─── AI (scored-action system) ───
 
   private doAITurn(unit: BattleUnit): void {
-    // Simple AI: move toward nearest enemy and attack if possible
     const enemies = this.state.units.filter(
       (u) => u.isAlive && u.team !== unit.team
     );
@@ -453,82 +454,75 @@ export class BattleManager {
       return;
     }
 
-    // Find nearest enemy
-    let nearest = enemies[0];
-    let nearestDist = Infinity;
-    for (const enemy of enemies) {
-      const dist = Math.abs(enemy.x - unit.x) + Math.abs(enemy.y - unit.y);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearest = enemy;
-      }
-    }
+    // Create AI controller with behavior derived from unit's job
+    const ai = AIController.forUnit(unit);
+    const decision = ai.decideTurn(unit, this.state.units, this.state.map);
 
-    // Calculate move range
-    const occupied = this.getOccupiedTiles(unit.id);
-    const moveRange = calculateMoveRange(
-      unit.x, unit.y, unit.move, unit.jump,
-      this.state.map, occupied
-    );
-
-    // Find best tile to move to (closest to nearest enemy)
-    let bestTile = { x: unit.x, y: unit.y };
-    let bestDist = nearestDist;
-
-    for (const key of moveRange) {
-      const [mx, my] = key.split(',').map(Number);
-      const dist = Math.abs(mx - nearest.x) + Math.abs(my - nearest.y);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestTile = { x: mx, y: my };
-      }
-    }
-
-    // Move
-    if (bestTile.x !== unit.x || bestTile.y !== unit.y) {
-      unit.x = bestTile.x;
-      unit.y = bestTile.y;
+    // ─── Execute move ───
+    const mx = decision.moveTarget.x;
+    const my = decision.moveTarget.y;
+    if (mx !== unit.x || my !== unit.y) {
+      unit.x = mx;
+      unit.y = my;
       unit.hasMoved = true;
     }
 
-    // Attack if in range
-    const attackRange = calculateAttackRange(
-      unit.x, unit.y, 1, unit.attackRange,
-      this.state.map
-    );
+    // ─── Execute action ───
+    if (decision.actionType === 'attack' && decision.targetUnitId) {
+      const target = this.state.units.find((u) => u.id === decision.targetUnitId);
+      if (target && target.isAlive) {
+        // Face toward target
+        unit.facing = this.getFacingToward(unit.x, unit.y, target.x, target.y);
 
-    for (const enemy of enemies) {
-      if (attackRange.has(`${enemy.x},${enemy.y}`)) {
-        unit.facing = this.getFacingToward(unit.x, unit.y, enemy.x, enemy.y);
-        const dmgInput = this.buildDamageInput(unit, enemy, false);
+        // Build damage input — AI does NOT account for reaction abilities (faithful to FFT)
+        const dmgInput = this.buildDamageInput(unit, target, false);
         const hitResult = calculateHitChance(dmgInput);
 
         if (hitResult.hit) {
           const dmgResult = calculateDamage(dmgInput);
           if (dmgResult.isHealing) {
-            enemy.currentHP = Math.min(enemy.maxHP, enemy.currentHP + dmgResult.damage);
+            target.currentHP = Math.min(target.maxHP, target.currentHP + dmgResult.damage);
           } else {
-            enemy.currentHP = Math.max(0, enemy.currentHP - dmgResult.damage);
+            target.currentHP = Math.max(0, target.currentHP - dmgResult.damage);
           }
-          this.addDamageDisplay(enemy.id, dmgResult.damage, dmgResult.isCritical, dmgResult.isHealing, false);
-          enemy.lastDamageResult = {
-            targetId: enemy.id, amount: dmgResult.damage, isCritical: dmgResult.isCritical,
-            isHealing: dmgResult.isHealing, isMiss: false, timestamp: Date.now(),
+          this.addDamageDisplay(target.id, dmgResult.damage, dmgResult.isCritical, dmgResult.isHealing, false);
+          target.lastDamageResult = {
+            targetId: target.id,
+            amount: dmgResult.damage,
+            isCritical: dmgResult.isCritical,
+            isHealing: dmgResult.isHealing,
+            isMiss: false,
+            timestamp: Date.now(),
           };
-          if (enemy.currentHP <= 0) enemy.isAlive = false;
+          if (target.currentHP <= 0) target.isAlive = false;
         } else {
-          this.addDamageDisplay(enemy.id, 0, false, false, true);
-          enemy.lastDamageResult = {
-            targetId: enemy.id, amount: 0, isCritical: false, isHealing: false, isMiss: true, timestamp: Date.now(),
+          this.addDamageDisplay(target.id, 0, false, false, true);
+          target.lastDamageResult = {
+            targetId: target.id,
+            amount: 0,
+            isCritical: false,
+            isHealing: false,
+            isMiss: true,
+            timestamp: Date.now(),
           };
         }
         unit.hasActed = true;
-        break;
       }
     }
 
-    // Face nearest enemy
-    unit.facing = this.getFacingToward(unit.x, unit.y, nearest.x, nearest.y);
+    // ─── Face nearest threat after acting ───
+    let nearestEnemy = enemies[0];
+    let nearestDist = Infinity;
+    for (const enemy of enemies) {
+      const dist = Math.abs(enemy.x - unit.x) + Math.abs(enemy.y - unit.y);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestEnemy = enemy;
+      }
+    }
+    if (nearestEnemy) {
+      unit.facing = this.getFacingToward(unit.x, unit.y, nearestEnemy.x, nearestEnemy.y);
+    }
 
     this.checkBattleEnd();
     this.endTurn();
