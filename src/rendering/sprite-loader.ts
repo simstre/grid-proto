@@ -13,9 +13,8 @@ import * as PIXI from 'pixi.js';
  * - First palette section (top-left ~1/3 of sheet) is the default
  * - First row of each section has idle + walk frames for 4 directions
  *
- * We use a FIXED GRID sampling approach to avoid detecting floating body parts
- * as separate sprites. Instead of auto-detecting frame boundaries, we sample
- * fixed-size regions at expected positions and trim them.
+ * We use column-density analysis to find contiguous content spans, then filter
+ * to only keep full character sprites (not body part fragments).
  */
 
 export type SpriteDirection = 'south' | 'west' | 'east' | 'north';
@@ -26,6 +25,16 @@ interface SpriteFrame {
   width: number;
   height: number;
 }
+
+interface SpriteFrameWithContent extends SpriteFrame {
+  contentPixels: number;
+}
+
+// ─── Constants ───
+
+const MIN_FRAME_HEIGHT = 35;
+const MIN_FRAME_WIDTH = 20;
+const MIN_CONTENT_FOR_FULL_SPRITE = 200;
 
 // ─── State ───
 
@@ -80,20 +89,6 @@ export async function loadJobSpriteSheet(jobName: string): Promise<boolean> {
 
 // ─── Sheet Processing ───
 
-/**
- * Fixed grid constants for FFT sprite sheets.
- * The sheets are ~800-830px wide, ~350-700px tall.
- * The first palette section occupies the left ~1/3 (~270px wide).
- * The first row starts near y=0 and contains idle/walk frames for 4 directions.
- * Each frame cell is approximately 48x64 px (with padding).
- */
-const FRAME_CELL_W = 48;
-const FRAME_CELL_H = 64;
-const FIRST_ROW_Y = 0;       // Top of the first row of frames
-const FIRST_COL_X = 0;       // Left edge of first palette section
-const MAX_FRAMES_PER_ROW = 14; // Maximum frames to look for in a row
-const MIN_CONTENT_PIXELS = 30; // Minimum non-bg pixels for a valid frame
-
 async function processSheet(jobName: string, texture: PIXI.Texture): Promise<void> {
   const w = texture.source.width;
   const h = texture.source.height;
@@ -135,136 +130,46 @@ async function processSheet(jobName: string, texture: PIXI.Texture): Promise<voi
   fixedTex.source.scaleMode = 'nearest';
   fixedSheets.set(jobName, fixedTex);
 
-  // ─── Fixed grid frame extraction ───
+  // ─── Column-density frame extraction ───
   // Scan the first palette section (left ~1/3 of the sheet, top portion)
   const sectionW = Math.min(Math.floor(w / 2.5), 320);
-  const scanH = Math.min(FRAME_CELL_H + 10, h); // Only scan first row height
+  const scanH = Math.min(150, h);
 
-  // Step 1: Find occupied cells in the first row using fixed grid
-  const frames = findFramesFixedGrid(data, w, h, sectionW, scanH, isBg);
+  // Find content spans using column density analysis
+  const allFrames = findFramesByColumnDensity(data, w, h, sectionW, scanH, isBg);
 
-  if (frames.length === 0) {
-    // Fallback: try scanning with a wider region and different cell sizes
-    console.warn(`[sprite-loader] ${jobName}: no frames found with fixed grid, trying fallback`);
-    const fallbackFrames = findFramesFallback(data, w, h, sectionW, Math.min(h, 150), isBg);
-    if (fallbackFrames.length === 0) {
-      console.warn(`[sprite-loader] ${jobName}: no frames found even with fallback`);
-      return;
-    }
-    assignDirectionFrames(jobName, fallbackFrames, fixedTex);
+  // Filter to only full character sprites (not body part fragments)
+  const fullSprites = allFrames.filter(
+    f => f.height >= MIN_FRAME_HEIGHT &&
+         f.width >= MIN_FRAME_WIDTH &&
+         f.contentPixels >= MIN_CONTENT_FOR_FULL_SPRITE
+  );
+
+  if (fullSprites.length === 0) {
+    console.warn(`[sprite-loader] ${jobName}: no full sprite frames found (${allFrames.length} candidates rejected)`);
     return;
   }
 
-  assignDirectionFrames(jobName, frames, fixedTex);
+  // Sort by x-position and take exactly the first 4
+  fullSprites.sort((a, b) => a.x - b.x);
+  const idleFrames = fullSprites.slice(0, 4);
+
+  assignDirectionFrames(jobName, idleFrames, fixedTex);
 }
 
 /**
- * Find frames using a fixed grid approach.
- * Instead of detecting frame boundaries, we sample fixed-size cells
- * and check which ones contain content.
+ * Find frames by analyzing column content density.
+ * Finds spans of columns with significant content, which naturally groups
+ * full sprites together. Body parts are narrower spans with less content.
  */
-function findFramesFixedGrid(
+function findFramesByColumnDensity(
   data: Uint8ClampedArray,
   imgW: number,
   imgH: number,
   sectionW: number,
   scanH: number,
   isBg: (i: number) => boolean
-): SpriteFrame[] {
-  const frames: SpriteFrame[] = [];
-
-  // Try to find the top of content (skip any top padding)
-  let contentStartY = 0;
-  outer: for (let y = 0; y < Math.min(20, imgH); y++) {
-    for (let x = 0; x < sectionW; x++) {
-      if (!isBg(y * imgW + x)) {
-        contentStartY = Math.max(0, y - 1);
-        break outer;
-      }
-    }
-  }
-
-  // Scan cells across the first row
-  const cellY = contentStartY;
-  const cellH = Math.min(FRAME_CELL_H, imgH - cellY);
-
-  for (let col = 0; col < MAX_FRAMES_PER_ROW; col++) {
-    const cellX = FIRST_COL_X + col * FRAME_CELL_W;
-    if (cellX + FRAME_CELL_W > sectionW + FRAME_CELL_W) break; // Allow slight overflow
-
-    // Count non-bg pixels and find bounding box within this cell
-    const bbox = getCellBoundingBox(data, imgW, imgH, cellX, cellY, FRAME_CELL_W, cellH, isBg);
-    if (bbox && bbox.contentPixels >= MIN_CONTENT_PIXELS) {
-      frames.push(bbox);
-    }
-  }
-
-  return frames;
-}
-
-/**
- * Get the tight bounding box of content within a cell region.
- */
-function getCellBoundingBox(
-  data: Uint8ClampedArray,
-  imgW: number,
-  imgH: number,
-  cellX: number,
-  cellY: number,
-  cellW: number,
-  cellH: number,
-  isBg: (i: number) => boolean
-): (SpriteFrame & { contentPixels: number }) | null {
-  let minX = cellW, maxX = 0, minY = cellH, maxY = 0;
-  let count = 0;
-
-  const maxCellX = Math.min(cellX + cellW, imgW);
-  const maxCellY = Math.min(cellY + cellH, imgH);
-
-  for (let y = cellY; y < maxCellY; y++) {
-    for (let x = cellX; x < maxCellX; x++) {
-      if (!isBg(y * imgW + x)) {
-        const lx = x - cellX;
-        const ly = y - cellY;
-        if (lx < minX) minX = lx;
-        if (lx > maxX) maxX = lx;
-        if (ly < minY) minY = ly;
-        if (ly > maxY) maxY = ly;
-        count++;
-      }
-    }
-  }
-
-  if (count < MIN_CONTENT_PIXELS) return null;
-
-  const bboxW = maxX - minX + 1;
-  const bboxH = maxY - minY + 1;
-
-  // Sanity: reject if too small or too narrow (likely just a weapon or hand)
-  if (bboxW < 10 || bboxH < 20) return null;
-
-  return {
-    x: cellX + minX,
-    y: cellY + minY,
-    width: bboxW,
-    height: bboxH,
-    contentPixels: count,
-  };
-}
-
-/**
- * Fallback: find the largest connected content regions in the scan area.
- * This is simpler than the old column-gap approach — it finds vertical
- * stripes of content with enough density to be a full sprite.
- */
-function findFramesFallback(
-  data: Uint8ClampedArray,
-  imgW: number,
-  imgH: number,
-  sectionW: number,
-  scanH: number,
-  isBg: (i: number) => boolean
-): SpriteFrame[] {
+): SpriteFrameWithContent[] {
   // Build a column content profile
   const colContentCount = new Uint16Array(sectionW);
   for (let x = 0; x < sectionW; x++) {
@@ -306,11 +211,11 @@ function findFramesFallback(
   }
 
   // For each span, get tight bounding box
-  const frames: SpriteFrame[] = [];
+  const frames: SpriteFrameWithContent[] = [];
   for (const span of spans) {
     const spanW = span.endX - span.startX + 1;
     const bbox = getCellBoundingBox(data, imgW, imgH, span.startX, 0, spanW, scanH, isBg);
-    if (bbox && bbox.contentPixels >= MIN_CONTENT_PIXELS && bbox.height >= 20) {
+    if (bbox) {
       frames.push(bbox);
     }
   }
@@ -319,42 +224,70 @@ function findFramesFallback(
 }
 
 /**
+ * Get the tight bounding box of content within a cell region.
+ */
+function getCellBoundingBox(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  cellX: number,
+  cellY: number,
+  cellW: number,
+  cellH: number,
+  isBg: (i: number) => boolean
+): SpriteFrameWithContent | null {
+  let minX = cellW, maxX = 0, minY = cellH, maxY = 0;
+  let count = 0;
+
+  const maxCellX = Math.min(cellX + cellW, imgW);
+  const maxCellY = Math.min(cellY + cellH, imgH);
+
+  for (let y = cellY; y < maxCellY; y++) {
+    for (let x = cellX; x < maxCellX; x++) {
+      if (!isBg(y * imgW + x)) {
+        const lx = x - cellX;
+        const ly = y - cellY;
+        if (lx < minX) minX = lx;
+        if (lx > maxX) maxX = lx;
+        if (ly < minY) minY = ly;
+        if (ly > maxY) maxY = ly;
+        count++;
+      }
+    }
+  }
+
+  if (count === 0) return null;
+
+  return {
+    x: cellX + minX,
+    y: cellY + minY,
+    width: maxX - minX + 1,
+    height: maxY - minY + 1,
+    contentPixels: count,
+  };
+}
+
+/**
  * Assign direction frames from a list of detected frames.
  * FFT direction order: South, West, East, North.
- * Each direction has ~2-4 frames (idle, walk1, walk2, etc.)
- * The FIRST frame of each group is the idle standing pose.
+ * Expects exactly 4 frames (or fewer, in which case duplicates fill gaps).
  */
 function assignDirectionFrames(
   jobName: string,
   frames: SpriteFrame[],
   fixedTex: PIXI.Texture
 ): void {
-  // Sort by x position
-  frames.sort((a, b) => a.x - b.x);
-
   const directions: SpriteDirection[] = ['south', 'west', 'east', 'north'];
 
-  if (frames.length >= 4) {
-    // Divide the frames into 4 roughly equal direction groups
-    const groupSize = Math.ceil(frames.length / 4);
-    for (let d = 0; d < 4; d++) {
-      const groupStart = d * groupSize;
-      if (groupStart < frames.length) {
-        const frame = frames[groupStart]; // First frame of each group = idle
-        storeIdleFrame(jobName, directions[d], frame, fixedTex);
-      }
-    }
-  } else {
-    // Fewer than 4 frames: use what we have, duplicate for missing directions
-    for (let d = 0; d < 4; d++) {
-      const frame = frames[Math.min(d, frames.length - 1)];
-      storeIdleFrame(jobName, directions[d], frame, fixedTex);
-    }
+  // Map each of the (up to) 4 frames to a direction
+  for (let d = 0; d < 4; d++) {
+    const frame = frames[Math.min(d, frames.length - 1)];
+    storeIdleFrame(jobName, directions[d], frame, fixedTex);
   }
 
   loadedJobs.add(jobName);
   const found = directions.filter(d => idleFrameTextures.has(`${jobName}:${d}`)).length;
-  console.log(`[sprite-loader] ${jobName}: extracted ${frames.length} frames, ${found}/4 idle directions`);
+  console.log(`[sprite-loader] ${jobName}: extracted ${frames.length} idle frames, ${found}/4 directions assigned`);
 }
 
 function storeIdleFrame(

@@ -62,7 +62,7 @@ export class BattleHUD {
     this.actionMenu.style.cssText = `
       position:absolute;bottom:24px;left:24px;
       ${PANEL_STYLE}
-      padding:6px 4px;min-width:130px;display:none;
+      padding:8px 6px;min-width:160px;display:none;
     `;
     this.container.appendChild(this.actionMenu);
 
@@ -176,29 +176,31 @@ export class BattleHUD {
     this.actionMenu.appendChild(title);
 
     const actions = [
-      { label: 'Move', key: 'move', enabled: !unit.hasMoved && state.phase === 'select_action' },
-      { label: 'Act', key: 'attack', enabled: !unit.hasActed && state.phase === 'select_action' },
-      { label: 'Wait', key: 'wait', enabled: state.phase === 'select_action' },
+      { label: 'Move', key: 'move', shortcut: '1', enabled: !unit.hasMoved && state.phase === 'select_action' },
+      { label: 'Act', key: 'attack', shortcut: '2', enabled: !unit.hasActed && state.phase === 'select_action' },
+      { label: 'Wait', key: 'wait', shortcut: '3', enabled: state.phase === 'select_action' },
     ];
 
     if (state.phase !== 'select_action') {
-      actions.push({ label: 'Back', key: 'cancel', enabled: true });
+      actions.push({ label: 'Back', key: 'cancel', shortcut: '4', enabled: true });
     }
 
     for (const action of actions) {
       const btn = document.createElement('div');
       btn.style.cssText = `
-        padding:5px 10px 5px 20px;
+        padding:10px 8px 10px 24px;
         cursor:${action.enabled ? 'pointer' : 'default'};
         color:${action.enabled ? UI.text : '#404060'};
-        font-size:13px;
+        font-size:15px;
         position:relative;
         transition:background 0.1s;
       `;
 
+      const shortcutSpan = `<span style="color:${action.enabled ? '#666688' : '#303050'};margin-right:6px;font-size:13px;">${action.shortcut}.</span>`;
+
       // FFT-style cursor marker for enabled items
       if (action.enabled) {
-        btn.innerHTML = `<span style="position:absolute;left:6px;color:${UI.cursorActive};display:none">►</span>${action.label}`;
+        btn.innerHTML = `<span style="position:absolute;left:6px;color:${UI.cursorActive};display:none">►</span>${shortcutSpan}${action.label}`;
         btn.addEventListener('mouseenter', () => {
           btn.style.background = UI.cursorHover;
           (btn.firstElementChild as HTMLElement).style.display = 'inline';
@@ -211,7 +213,7 @@ export class BattleHUD {
           if (this.onAction) this.onAction(action.key);
         });
       } else {
-        btn.innerHTML = `<span style="position:absolute;left:6px;color:transparent">►</span>${action.label}`;
+        btn.innerHTML = `<span style="position:absolute;left:6px;color:transparent">►</span>${shortcutSpan}${action.label}`;
       }
 
       this.actionMenu.appendChild(btn);

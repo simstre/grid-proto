@@ -35,11 +35,29 @@ const PANEL_STYLE = `
 `;
 
 const NODE_ICONS: Record<WorldNodeType, string> = {
-  story_battle: '[X]',
-  town: '[=]',
-  random_encounter: '[!]',
-  locked: '[?]',
+  story_battle: '⚔',
+  town: '🏠',
+  random_encounter: '●',
+  locked: '???',
 };
+
+// Inject CSS animations for world map nodes
+const worldMapStyleId = 'world-map-styles';
+if (!document.getElementById(worldMapStyleId)) {
+  const style = document.createElement('style');
+  style.id = worldMapStyleId;
+  style.textContent = `
+    @keyframes wm-pulse-gold {
+      0%, 100% { text-shadow: 0 0 8px #ffe888, 0 0 16px #d8b040; }
+      50% { text-shadow: 0 0 16px #ffe888, 0 0 32px #d8b040, 0 0 48px #ffe88844; }
+    }
+    @keyframes wm-pulse-available {
+      0%, 100% { text-shadow: 0 0 4px rgba(255,255,255,0.4); }
+      50% { text-shadow: 0 0 10px rgba(255,255,255,0.8), 0 0 20px rgba(255,232,136,0.3); }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 export class WorldMapUI {
   private container: HTMLDivElement;
@@ -237,6 +255,10 @@ export class WorldMapUI {
       const isAccessible = availableIds.has(node.id);
       const isCurrent = node.id === currentNodeId;
       const isCompleted = node.battleId ? gameState.completedBattles.has(node.battleId) : false;
+      const isLocked = node.type === 'locked';
+
+      // Hide locked nodes entirely
+      if (isLocked && !isAccessible) continue;
 
       const nodeEl = document.createElement('div');
       nodeEl.style.cssText = `
@@ -250,46 +272,91 @@ export class WorldMapUI {
 
       // Icon
       const iconEl = document.createElement('div');
-      const iconColor = !isAccessible
-        ? '#555'
-        : isCurrent
-          ? UI.cursorActive
-          : isCompleted
-            ? UI.hpGreen
-            : UI.text;
+      let iconColor: string;
+      let iconAnimation = '';
+
+      if (isCurrent) {
+        iconColor = UI.cursorActive;
+        iconAnimation = 'animation: wm-pulse-gold 1.5s ease-in-out infinite;';
+      } else if (isCompleted) {
+        iconColor = '#6a9a6a';
+      } else if (isAccessible) {
+        iconColor = '#fffbe0';
+        iconAnimation = 'animation: wm-pulse-available 2s ease-in-out infinite;';
+      } else {
+        iconColor = '#555';
+      }
 
       iconEl.style.cssText = `
-        font-size: 14px;
+        font-size: 22px;
         color: ${iconColor};
-        margin-bottom: 2px;
-        ${isCurrent ? `text-shadow: 0 0 8px ${UI.cursorActive};` : ''}
+        margin-bottom: 3px;
+        ${iconAnimation}
       `;
       iconEl.textContent = this.getNodeIcon(node.type, isCompleted);
       nodeEl.appendChild(iconEl);
 
       // Name label
       const labelEl = document.createElement('div');
+      const labelColor = isCurrent
+        ? UI.cursorActive
+        : isCompleted
+          ? '#7a8a7a'
+          : isAccessible
+            ? UI.text
+            : '#555';
       labelEl.style.cssText = `
-        font-size: 7px;
-        color: ${isAccessible ? UI.textDim : '#444'};
+        font-size: 11px;
+        color: ${labelColor};
         white-space: nowrap;
-        max-width: 100px;
+        max-width: 140px;
         overflow: hidden;
         text-overflow: ellipsis;
+        text-shadow: 1px 1px 2px #000, 0 0 4px rgba(0,0,0,0.8);
       `;
       labelEl.textContent = node.name;
       nodeEl.appendChild(labelEl);
 
+      // "(You are here)" indicator for current node
+      if (isCurrent) {
+        const hereEl = document.createElement('div');
+        hereEl.style.cssText = `
+          font-size: 9px;
+          color: ${UI.cursorActive};
+          white-space: nowrap;
+          margin-top: 1px;
+          text-shadow: 1px 1px 2px #000;
+          letter-spacing: 0.5px;
+        `;
+        hereEl.textContent = '(You are here)';
+        nodeEl.appendChild(hereEl);
+      }
+
+      // Completed checkmark overlay
+      if (isCompleted) {
+        const checkEl = document.createElement('div');
+        checkEl.style.cssText = `
+          font-size: 14px;
+          color: ${UI.hpGreen};
+          position: absolute;
+          top: -2px;
+          right: -8px;
+          text-shadow: 1px 1px 2px #000;
+        `;
+        checkEl.textContent = '✓';
+        nodeEl.appendChild(checkEl);
+      }
+
       if (isAccessible) {
         nodeEl.addEventListener('mouseenter', () => {
           iconEl.style.color = UI.cursorActive;
-          iconEl.style.textShadow = `0 0 8px ${UI.cursorActive}`;
-          labelEl.style.color = UI.text;
+          iconEl.style.animation = 'wm-pulse-gold 1s ease-in-out infinite';
+          labelEl.style.color = UI.textBright;
         });
         nodeEl.addEventListener('mouseleave', () => {
           iconEl.style.color = iconColor;
-          iconEl.style.textShadow = isCurrent ? `0 0 8px ${UI.cursorActive}` : 'none';
-          labelEl.style.color = UI.textDim;
+          iconEl.style.animation = iconAnimation ? iconAnimation.replace('animation: ', '').replace(';', '') : 'none';
+          labelEl.style.color = labelColor;
         });
         nodeEl.addEventListener('click', () => {
           this.onNodeSelect?.(node.id);
@@ -298,6 +365,27 @@ export class WorldMapUI {
 
       mapArea.appendChild(nodeEl);
     }
+
+    // Legend at the bottom of map area
+    const legend = document.createElement('div');
+    legend.style.cssText = `
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      ${PANEL_STYLE}
+      padding: 6px 16px;
+      font-size: 10px;
+      display: flex;
+      gap: 20px;
+      white-space: nowrap;
+    `;
+    legend.innerHTML = `
+      <span>⚔ Battle</span>
+      <span>🏠 Town</span>
+      <span>● Encounter</span>
+    `;
+    mapArea.appendChild(legend);
   }
 
   hide(): void {
@@ -318,7 +406,7 @@ export class WorldMapUI {
   }
 
   private getNodeIcon(type: WorldNodeType, completed: boolean): string {
-    if (completed) return '[*]';
+    if (completed) return NODE_ICONS[type];
     return NODE_ICONS[type];
   }
 }

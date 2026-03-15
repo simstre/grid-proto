@@ -580,6 +580,31 @@ export class Game {
       this.needsRedraw = true;
     }
 
+    // Number key shortcuts for action menu
+    if (state.phase === 'select_action') {
+      const activeUnit = state.units.find(u => u.id === state.activeUnitId);
+      if (activeUnit && activeUnit.team === 'player') {
+        if (this.input.isKeyJustPressed('Digit1') && !activeUnit.hasMoved) {
+          this.handleAction('move');
+        }
+        if (this.input.isKeyJustPressed('Digit2') && !activeUnit.hasActed) {
+          this.handleAction('attack');
+        }
+        if (this.input.isKeyJustPressed('Digit3')) {
+          this.handleAction('wait');
+        }
+      }
+    }
+
+    // Key 4 = cancel/back in sub-menus
+    if (['select_move', 'select_target', 'confirm_facing'].includes(state.phase)) {
+      if (this.input.isKeyJustPressed('Digit4')) {
+        audio.playSfx('cancel');
+        this.battle.cancel();
+        this.needsRedraw = true;
+      }
+    }
+
     // Handle click
     if (inputState.mouseJustPressed && this.hoveredTile) {
       this.handleTileClick(this.hoveredTile.x, this.hoveredTile.y);
@@ -762,16 +787,16 @@ export class Game {
       }
     }
 
-    // Map terrain to dark ground colors
-    const terrainColors: Record<string, { center: number; edge: number }> = {
-      grass:  { center: 0x1a2e14, edge: 0x0a1408 },
-      stone:  { center: 0x2a2828, edge: 0x101010 },
-      water:  { center: 0x0a1828, edge: 0x040810 },
-      sand:   { center: 0x2a2418, edge: 0x101008 },
-      dirt:   { center: 0x1e1810, edge: 0x0a0804 },
-      lava:   { center: 0x1a0800, edge: 0x0a0400 },
-      wood:   { center: 0x1a1408, edge: 0x0a0804 },
-      roof:   { center: 0x1a1010, edge: 0x0a0808 },
+    // Map terrain to MUCH darker ground colors — the map sits on a dark landscape
+    const terrainColors: Record<string, { base: number; dark: number; deepDark: number }> = {
+      grass:  { base: 0x0e1a0a, dark: 0x070d05, deepDark: 0x030602 },
+      stone:  { base: 0x141414, dark: 0x0a0a0a, deepDark: 0x040404 },
+      water:  { base: 0x060e14, dark: 0x030710, deepDark: 0x010306 },
+      sand:   { base: 0x14120a, dark: 0x0a0905, deepDark: 0x040302 },
+      dirt:   { base: 0x100c08, dark: 0x080604, deepDark: 0x030201 },
+      lava:   { base: 0x100400, dark: 0x080200, deepDark: 0x040100 },
+      wood:   { base: 0x0e0a04, dark: 0x070502, deepDark: 0x030201 },
+      roof:   { base: 0x0e0808, dark: 0x070404, deepDark: 0x030202 },
     };
 
     const colors = terrainColors[dominantTerrain] || terrainColors.grass;
@@ -782,25 +807,37 @@ export class Game {
       this.camera.rotation, map.width, map.height
     );
 
-    // Create a large ground plane well beyond map boundaries
-    const extend = 2000; // pixels beyond map in all directions
+    // Create a large ground plane extending infinitely in all directions
+    const extend = 4000; // large enough to cover any scroll/zoom
     const bg = new PIXI.Graphics();
 
-    // Outer dark rectangle
+    // Fill entire area with the deepest dark color
     bg.rect(
       centerScreen.px - extend,
       centerScreen.py - extend,
       extend * 2,
       extend * 2
     );
-    bg.fill(colors.edge);
+    bg.fill(colors.deepDark);
 
-    // Inner lighter rectangle (simulates radial gradient with concentric rects)
-    const steps = 8;
-    for (let i = steps; i >= 0; i--) {
-      const t = i / steps;
-      const size = extend * (0.3 + 0.7 * t);
-      const alpha = 0.15 * (1 - t); // More transparent toward edges
+    // Build concentric rectangles from outside in, getting lighter toward center
+    // This creates a vignette: dark at edges, slightly lighter near the map
+    const vignetteSteps = 12;
+    for (let i = 0; i <= vignetteSteps; i++) {
+      const t = i / vignetteSteps; // 0 = outermost, 1 = innermost
+      const size = extend * (1.0 - t * 0.75); // shrinks from full extend to 25%
+
+      // Blend from deepDark at edges to base near center
+      const r0 = (colors.deepDark >> 16) & 0xff;
+      const g0 = (colors.deepDark >> 8) & 0xff;
+      const b0 = colors.deepDark & 0xff;
+      const r1 = (colors.base >> 16) & 0xff;
+      const g1 = (colors.base >> 8) & 0xff;
+      const b1 = colors.base & 0xff;
+      const r = Math.round(r0 + (r1 - r0) * t);
+      const g = Math.round(g0 + (g1 - g0) * t);
+      const b = Math.round(b0 + (b1 - b0) * t);
+      const blendedColor = (r << 16) | (g << 8) | b;
 
       bg.rect(
         centerScreen.px - size,
@@ -808,28 +845,26 @@ export class Game {
         size * 2,
         size * 2
       );
-      bg.fill({ color: colors.center, alpha: 1 - t * 0.6 });
+      bg.fill(blendedColor);
     }
 
-    // Add subtle fog/shadow at map edges using a semi-transparent overlay
-    // that fades from transparent at center to darker at edges
-    const fogOverlay = new PIXI.Graphics();
-    const fogExtend = 600;
-    const fogSteps = 6;
-    for (let i = fogSteps; i >= 1; i--) {
-      const t = i / fogSteps;
-      const size = fogExtend * t;
-      fogOverlay.rect(
-        centerScreen.px - size,
-        centerScreen.py - size,
-        size * 2,
-        size * 2
+    // Vignette overlay: darken the outer edges with semi-transparent black rings
+    const vignetteOverlay = new PIXI.Graphics();
+    const vSteps = 10;
+    for (let i = vSteps; i >= 1; i--) {
+      const t = i / vSteps;
+      const outerSize = extend * (0.5 + 0.5 * t);
+      vignetteOverlay.rect(
+        centerScreen.px - outerSize,
+        centerScreen.py - outerSize,
+        outerSize * 2,
+        outerSize * 2
       );
-      fogOverlay.fill({ color: 0x000000, alpha: 0.04 * t });
+      vignetteOverlay.fill({ color: 0x000000, alpha: 0.06 * t });
     }
 
     this.backgroundLayer.addChild(bg);
-    this.backgroundLayer.addChild(fogOverlay);
+    this.backgroundLayer.addChild(vignetteOverlay);
   }
 
   private redrawRangeOverlays(): void {
