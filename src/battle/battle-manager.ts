@@ -3,8 +3,23 @@ import type { CTUnit } from './ct-system';
 import { advanceToNextTurn, resolveTurnEnd, predictTurnOrder } from './ct-system';
 import { calculateMoveRange, calculateAttackRange, findPath } from './movement';
 import { Direction } from '@/core/constants';
+import { calculateDamage, calculateHitChance, type DamageInput, type WeaponCategory } from './damage-calc';
+import { statusManager, type AppliedStatus, type StatusTickResult } from './status-effects';
+import type { ElementAffinityMap } from '@/data/elements';
+import type { ZodiacSign } from '@/data/zodiac';
+
+import type { StatusId } from './status-effects';
 
 // ─── Types ───
+
+export interface DamageDisplayData {
+  targetId: string;
+  amount: number;
+  isCritical: boolean;
+  isHealing: boolean;
+  isMiss: boolean;
+  timestamp: number;
+}
 
 export type BattlePhase =
   | 'init'
@@ -48,20 +63,40 @@ export interface BattleUnit {
   ct: number;
   isAlive: boolean;
 
-  // Status
+  // Status (legacy flags kept for CT system compat)
   hasHaste: boolean;
   hasSlow: boolean;
   hasStopped: boolean;
   isPetrified: boolean;
 
+  // New status effect system
+  statusEffects: AppliedStatus[];
+  statusImmunities: Set<StatusId>;
+
+  // Zodiac & elements
+  zodiacSign: ZodiacSign | null;
+  elementalAffinities: ElementAffinityMap;
+
   // Turn state
   hasMoved: boolean;
   hasActed: boolean;
 
-  // Equipment (placeholder for now)
+  // Equipment
   weaponPower: number;
   weaponType: string;
+  weaponCategory: WeaponCategory;
+  weaponAccuracy: number;
+  weaponElement: import('@/data/elements').Element | null;
   attackRange: number;
+  shieldEvasion: number;
+  accessoryEvasion: number;
+  classEvasion: number;
+
+  // Support abilities
+  hasAttackUp: boolean;
+
+  // Last combat results (for rendering)
+  lastDamageResult: DamageDisplayData | null;
 }
 
 export interface BattleState {
@@ -75,6 +110,7 @@ export interface BattleState {
   movePath: Array<{ x: number; y: number }>;
   turnOrder: string[];
   turnCount: number;
+  damageDisplay: DamageDisplayData[];
 }
 
 // ─── Battle Manager ───
@@ -94,6 +130,7 @@ export class BattleManager {
       movePath: [],
       turnOrder: [],
       turnCount: 0,
+      damageDisplay: [],
     };
   }
 
@@ -133,6 +170,38 @@ export class BattleManager {
     unit.hasMoved = false;
     unit.hasActed = false;
 
+    // Sync legacy status flags from new status system
+    this.syncStatusFlags(unit);
+
+    // Check if turn should be skipped (stop, stone, sleep, death)
+    if (statusManager.shouldSkipTurn(unit.statusEffects)) {
+      // Still process tick effects (e.g. poison can kill a stopped unit)
+      this.processStatusTicks(unit);
+      this.endTurn();
+      return;
+    }
+
+    // Process start-of-turn status ticks (poison damage, regen, etc.)
+    this.processStatusTicks(unit);
+
+    // Check if unit died from poison
+    if (unit.currentHP <= 0) {
+      unit.currentHP = 0;
+      unit.isAlive = false;
+      this.checkBattleEnd();
+      if (this.state.phase === 'battle_won' || this.state.phase === 'battle_lost') return;
+      this.endTurn();
+      return;
+    }
+
+    // Restrict actions based on status
+    if (statusManager.cannotMove(unit.statusEffects)) {
+      unit.hasMoved = true; // can't move
+    }
+    if (statusManager.cannotAct(unit.statusEffects)) {
+      unit.hasActed = true; // can't act
+    }
+
     if (unit.team === 'player') {
       this.state.phase = 'select_action';
       this.calculateRanges(unit);
@@ -141,6 +210,48 @@ export class BattleManager {
       // AI will be implemented later — for now, auto-wait
       setTimeout(() => this.doAITurn(unit), 500);
     }
+  }
+
+  private processStatusTicks(unit: BattleUnit): void {
+    const results = statusManager.processStartOfTurn(
+      unit.statusEffects,
+      unit.maxHP,
+      unit.maxMP
+    );
+
+    for (const result of results) {
+      if (result.hpChange !== 0) {
+        unit.currentHP = Math.max(0, Math.min(unit.maxHP, unit.currentHP + result.hpChange));
+        this.addDamageDisplay(unit.id, Math.abs(result.hpChange), false, result.hpChange > 0, false);
+      }
+    }
+
+    // Sync flags after status changes
+    this.syncStatusFlags(unit);
+  }
+
+  private syncStatusFlags(unit: BattleUnit): void {
+    unit.hasHaste = statusManager.hasStatus(unit.statusEffects, 'haste');
+    unit.hasSlow = statusManager.hasStatus(unit.statusEffects, 'slow');
+    unit.hasStopped = statusManager.hasStatus(unit.statusEffects, 'stop');
+    unit.isPetrified = statusManager.hasStatus(unit.statusEffects, 'stone');
+  }
+
+  private addDamageDisplay(
+    targetId: string,
+    amount: number,
+    isCritical: boolean,
+    isHealing: boolean,
+    isMiss: boolean
+  ): void {
+    this.state.damageDisplay.push({
+      targetId,
+      amount,
+      isCritical,
+      isHealing,
+      isMiss,
+      timestamp: Date.now(),
+    });
   }
 
   private calculateRanges(unit: BattleUnit): void {
@@ -228,9 +339,39 @@ export class BattleManager {
     // Face toward target
     unit.facing = this.getFacingToward(unit.x, unit.y, targetX, targetY);
 
-    // Calculate damage (simplified for now - full formula in Phase 3)
-    const damage = this.calculateBasicDamage(unit, target);
-    target.currentHP = Math.max(0, target.currentHP - damage);
+    // Build damage input
+    const dmgInput = this.buildDamageInput(unit, target, false);
+
+    // Hit check
+    const hitResult = calculateHitChance(dmgInput);
+    if (!hitResult.hit) {
+      this.addDamageDisplay(target.id, 0, false, false, true);
+      target.lastDamageResult = {
+        targetId: target.id, amount: 0, isCritical: false, isHealing: false, isMiss: true, timestamp: Date.now(),
+      };
+      unit.hasActed = true;
+      this.state.phase = 'select_action';
+      return true;
+    }
+
+    // Calculate damage
+    const dmgResult = calculateDamage(dmgInput);
+
+    if (dmgResult.isHealing) {
+      target.currentHP = Math.min(target.maxHP, target.currentHP + dmgResult.damage);
+    } else {
+      target.currentHP = Math.max(0, target.currentHP - dmgResult.damage);
+    }
+
+    this.addDamageDisplay(target.id, dmgResult.damage, dmgResult.isCritical, dmgResult.isHealing, false);
+    target.lastDamageResult = {
+      targetId: target.id,
+      amount: dmgResult.damage,
+      isCritical: dmgResult.isCritical,
+      isHealing: dmgResult.isHealing,
+      isMiss: false,
+      timestamp: Date.now(),
+    };
 
     if (target.currentHP <= 0) {
       target.isAlive = false;
@@ -359,9 +500,28 @@ export class BattleManager {
     for (const enemy of enemies) {
       if (attackRange.has(`${enemy.x},${enemy.y}`)) {
         unit.facing = this.getFacingToward(unit.x, unit.y, enemy.x, enemy.y);
-        const damage = this.calculateBasicDamage(unit, enemy);
-        enemy.currentHP = Math.max(0, enemy.currentHP - damage);
-        if (enemy.currentHP <= 0) enemy.isAlive = false;
+        const dmgInput = this.buildDamageInput(unit, enemy, false);
+        const hitResult = calculateHitChance(dmgInput);
+
+        if (hitResult.hit) {
+          const dmgResult = calculateDamage(dmgInput);
+          if (dmgResult.isHealing) {
+            enemy.currentHP = Math.min(enemy.maxHP, enemy.currentHP + dmgResult.damage);
+          } else {
+            enemy.currentHP = Math.max(0, enemy.currentHP - dmgResult.damage);
+          }
+          this.addDamageDisplay(enemy.id, dmgResult.damage, dmgResult.isCritical, dmgResult.isHealing, false);
+          enemy.lastDamageResult = {
+            targetId: enemy.id, amount: dmgResult.damage, isCritical: dmgResult.isCritical,
+            isHealing: dmgResult.isHealing, isMiss: false, timestamp: Date.now(),
+          };
+          if (enemy.currentHP <= 0) enemy.isAlive = false;
+        } else {
+          this.addDamageDisplay(enemy.id, 0, false, false, true);
+          enemy.lastDamageResult = {
+            targetId: enemy.id, amount: 0, isCritical: false, isHealing: false, isMiss: true, timestamp: Date.now(),
+          };
+        }
         unit.hasActed = true;
         break;
       }
@@ -423,13 +583,42 @@ export class BattleManager {
     return dy > 0 ? Direction.South : Direction.North;
   }
 
-  private calculateBasicDamage(attacker: BattleUnit, defender: BattleUnit): number {
-    // Simplified damage formula: PA * WeaponPower
-    // Full formula system will be in damage-calc.ts (Phase 3)
-    const raw = attacker.pa * attacker.weaponPower;
-    // Add some randomness (±10%)
-    const variance = 0.9 + Math.random() * 0.2;
-    return Math.max(1, Math.floor(raw * variance));
+  private buildDamageInput(
+    attacker: BattleUnit,
+    defender: BattleUnit,
+    isMagic: boolean,
+    abilityPower?: number,
+    abilityElement?: import('@/data/elements').Element
+  ): DamageInput {
+    return {
+      pa: attacker.pa,
+      ma: attacker.ma,
+      speed: attacker.speed,
+      brave: attacker.brave,
+      faith: attacker.faith,
+      weaponPower: attacker.weaponPower,
+      weaponCategory: attacker.weaponCategory,
+      weaponAccuracy: attacker.weaponAccuracy,
+      weaponElement: attacker.weaponElement,
+      attackerFacing: attacker.facing,
+      attackerStatuses: attacker.statusEffects,
+      attackerZodiac: attacker.zodiacSign,
+      hasAttackUp: attacker.hasAttackUp,
+      defenderMaxHP: defender.maxHP,
+      defenderCurrentHP: defender.currentHP,
+      defenderFaith: defender.faith,
+      defenderFacing: defender.facing,
+      defenderStatuses: defender.statusEffects,
+      defenderZodiac: defender.zodiacSign,
+      defenderElementAffinities: defender.elementalAffinities,
+      shieldEvasion: defender.shieldEvasion,
+      accessoryEvasion: defender.accessoryEvasion,
+      classEvasion: defender.classEvasion,
+      defenderSpeed: defender.speed,
+      isMagic,
+      abilityPower,
+      abilityElement,
+    };
   }
 
   private checkBattleEnd(): void {
@@ -479,11 +668,23 @@ export function createBattleUnit(
     hasSlow: false,
     hasStopped: false,
     isPetrified: false,
+    statusEffects: [],
+    statusImmunities: new Set<StatusId>(),
+    zodiacSign: null,
+    elementalAffinities: {},
     hasMoved: false,
     hasActed: false,
     weaponPower: 5,
     weaponType: 'sword',
+    weaponCategory: 'sword' as WeaponCategory,
+    weaponAccuracy: 90,
+    weaponElement: null,
     attackRange: 1,
+    shieldEvasion: 0,
+    accessoryEvasion: 0,
+    classEvasion: 5,
+    hasAttackUp: false,
+    lastDamageResult: null,
     ...overrides,
   };
 }

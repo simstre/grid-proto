@@ -320,16 +320,44 @@ export class Game {
         }
         break;
 
-      case 'select_target':
+      case 'select_target': {
+        // Find the target to check weapon type before attacking
+        const targetUnit = this.battle.state.units.find(
+          (u) => u.x === x && u.y === y && u.isAlive
+        );
+        const attackingUnit = this.battle.getActiveUnit();
+        const isMagicAttack = attackingUnit?.weaponCategory === 'staff' || attackingUnit?.weaponCategory === 'rod';
+
         if (this.battle.confirmAttack(x, y)) {
-          audio.playAttack();
-          // Play hit sound after a short delay
-          setTimeout(() => audio.playSfx('hit'), 200);
+          // Check the last damage result to see if it was a miss
+          const lastResult = targetUnit?.lastDamageResult;
+          const wasMiss = lastResult && lastResult.isMiss;
+
+          if (wasMiss) {
+            // No attack SFX on a miss — just a whoosh/cancel
+            audio.playSfx('cancel');
+          } else {
+            // Play appropriate SFX
+            if (isMagicAttack) {
+              audio.playSfx('magic');
+            } else {
+              audio.playAttack();
+            }
+            // Play hit sound after a short delay
+            setTimeout(() => audio.playSfx('hit'), 200);
+          }
+
+          // Check if the target died
+          if (targetUnit && !targetUnit.isAlive) {
+            setTimeout(() => audio.playSfx('death'), 300);
+          }
+
           this.needsRedraw = true;
           // Check for battle end BGM
           setTimeout(() => this.checkBattleEndAudio(), 400);
         }
         break;
+      }
 
       case 'confirm_facing': {
         const unit = this.battle.getActiveUnit();
