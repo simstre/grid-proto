@@ -36,7 +36,11 @@ export function createUnitGraphic(unit: UnitRenderData): PIXI.Container {
   const facing = FACING_MAP[unit.facing] || 'south';
 
   let sprite: PIXI.Sprite;
-  let spriteH: number;
+
+  // Fixed offset from anchor point for HP bar and indicator
+  // This ensures consistent positioning regardless of sprite frame size
+  const HP_BAR_Y = -50;
+  const ARROW_Y = -58;
 
   // Try loaded sprite sheet first
   const sheetFrame = hasJobSpriteSheet(unit.jobName)
@@ -54,7 +58,6 @@ export function createUnitGraphic(unit: UnitRenderData): PIXI.Container {
     const targetHeight = 48;
     const scale = targetHeight / sheetFrame.height;
     sprite.scale.set(scale);
-    spriteH = targetHeight;
 
     // Tint enemy sprites slightly red
     if (unit.team === 'enemy') {
@@ -69,23 +72,21 @@ export function createUnitGraphic(unit: UnitRenderData): PIXI.Container {
     sprite.anchor.set(0.5, 0.9);
     sprite.texture.source.scaleMode = 'nearest';
     sprite.scale.set(0.9);
-    spriteH = 48 * 0.9;
   }
 
   container.addChild(sprite);
 
-  // HP bar
+  // HP bar - fixed offset from ground position
   const hpBar = createHPBar(unit.currentHP, unit.maxHP);
-  hpBar.y = -spriteH - 2;
+  hpBar.y = HP_BAR_Y;
   container.addChild(hpBar);
 
-  // Active turn indicator
+  // Active turn indicator - fixed offset from ground position
   if (unit.isActive) {
     const arrow = new PIXI.Graphics();
-    const arrowY = -spriteH - 10;
-    arrow.poly([0, arrowY, -4, arrowY - 6, 4, arrowY - 6]);
+    arrow.poly([0, ARROW_Y, -4, ARROW_Y - 6, 4, ARROW_Y - 6]);
     arrow.fill(0xffe840);
-    arrow.poly([0, arrowY + 1, -3, arrowY - 5, 3, arrowY - 5]);
+    arrow.poly([0, ARROW_Y + 1, -3, ARROW_Y - 5, 3, ARROW_Y - 5]);
     arrow.fill(0xffff88);
     container.addChild(arrow);
   }

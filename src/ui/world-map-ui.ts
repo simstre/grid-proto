@@ -3,6 +3,7 @@
 import type { GameState } from '@/story/story-flags';
 import { saveGameState } from '@/story/story-flags';
 import { WorldMap, type WorldMapNode, type WorldNodeType } from '@/overworld/world-map';
+import { generateWorldMapCanvas } from '@/rendering/world-map-canvas';
 
 const UI = {
   panelBg: 'rgba(16, 16, 48, 0.94)',
@@ -184,56 +185,50 @@ export class WorldMapUI {
       flex: 1;
       position: relative;
       overflow: hidden;
-      background:
-        radial-gradient(ellipse at 50% 50%, rgba(20,20,60,1) 0%, rgba(8,8,24,1) 100%);
+      background: #2a2218;
     `;
     layout.appendChild(mapArea);
 
-    // Map title
-    const mapTitle = document.createElement('div');
-    mapTitle.style.cssText = `
-      position: absolute;
-      top: 16px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 14px;
-      color: ${UI.cursorActive};
-      letter-spacing: 3px;
-      text-shadow: 2px 2px 0px #000;
-    `;
-    mapTitle.textContent = 'WORLD MAP';
-    mapArea.appendChild(mapTitle);
-
-    // Render nodes
+    // Generate parchment world map background
     const allNodes = this.worldMap.getAllNodes();
-    const availableNodes = this.worldMap.getAvailableNodes(gameState);
-    const availableIds = new Set(availableNodes.map((n) => n.id));
-    const currentNodeId = this.worldMap.getCurrentNodeId();
-
-    // Draw connections first (simple lines via SVG)
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
-    mapArea.appendChild(svg);
-
+    const mapConnections: Array<[string, string]> = [];
     for (const node of allNodes) {
       if (node.chapter > gameState.currentChapter) continue;
       for (const connId of node.connectedNodes) {
-        const conn = allNodes.find((n) => n.id === connId);
+        const conn = allNodes.find(n => n.id === connId);
         if (!conn || conn.chapter > gameState.currentChapter) continue;
-        // Avoid drawing duplicate lines
         if (connId < node.id) continue;
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', `${node.position.x}%`);
-        line.setAttribute('y1', `${node.position.y}%`);
-        line.setAttribute('x2', `${conn.position.x}%`);
-        line.setAttribute('y2', `${conn.position.y}%`);
-        line.setAttribute('stroke', 'rgba(120,120,160,0.3)');
-        line.setAttribute('stroke-width', '2');
-        line.setAttribute('stroke-dasharray', '4,4');
-        svg.appendChild(line);
+        mapConnections.push([node.id, connId]);
       }
     }
+
+    // Render the map canvas once we know the container size
+    requestAnimationFrame(() => {
+      const rect = mapArea.getBoundingClientRect();
+      const mapNodes = allNodes
+        .filter(n => n.chapter <= gameState.currentChapter)
+        .map(n => ({
+          id: n.id,
+          name: n.name,
+          type: n.type,
+          x: n.position.x,
+          y: n.position.y,
+        }));
+
+      const mapCanvas = generateWorldMapCanvas(
+        Math.floor(rect.width),
+        Math.floor(rect.height),
+        mapNodes,
+        mapConnections
+      );
+      mapCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;';
+      mapArea.insertBefore(mapCanvas, mapArea.firstChild);
+    });
+
+    // Render interactive node buttons on top of the map canvas
+    const availableNodes = this.worldMap.getAvailableNodes(gameState);
+    const availableIds = new Set(availableNodes.map((n) => n.id));
+    const currentNodeId = this.worldMap.getCurrentNodeId();
 
     // Draw node buttons
     for (const node of allNodes) {

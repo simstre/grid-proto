@@ -101,6 +101,7 @@ export class Game {
 
   // Rendering layers
   private worldContainer!: PIXI.Container;
+  private backgroundLayer!: PIXI.Container;
   private tileLayer!: PIXI.Container;
   private rangeLayer!: PIXI.Container;
   private unitLayer!: PIXI.Container;
@@ -167,12 +168,14 @@ export class Game {
 
     // Create rendering layers
     this.worldContainer = new PIXI.Container();
+    this.backgroundLayer = new PIXI.Container();
     this.tileLayer = new PIXI.Container();
     this.rangeLayer = new PIXI.Container();
     this.unitLayer = new PIXI.Container();
     this.cursorGraphic = createCursorGraphic();
     this.cursorGraphic.visible = false;
 
+    this.worldContainer.addChild(this.backgroundLayer);
     this.worldContainer.addChild(this.tileLayer);
     this.worldContainer.addChild(this.rangeLayer);
     this.worldContainer.addChild(this.unitLayer);
@@ -732,6 +735,101 @@ export class Game {
     for (const tile of tiles) {
       this.tileLayer.addChild(tile.container);
     }
+    this.drawBackground();
+  }
+
+  private drawBackground(): void {
+    if (!this.battle) return;
+    this.backgroundLayer.removeChildren();
+
+    const state = this.battle.state;
+    const map = state.map;
+
+    // Determine dominant terrain color
+    const terrainCounts = new Map<string, number>();
+    for (let x = 0; x < map.width; x++) {
+      for (let y = 0; y < map.height; y++) {
+        const t = map.tiles[x][y].terrain;
+        terrainCounts.set(t, (terrainCounts.get(t) || 0) + 1);
+      }
+    }
+    let dominantTerrain = 'grass';
+    let maxCount = 0;
+    for (const [terrain, count] of terrainCounts) {
+      if (count > maxCount) {
+        maxCount = count;
+        dominantTerrain = terrain;
+      }
+    }
+
+    // Map terrain to dark ground colors
+    const terrainColors: Record<string, { center: number; edge: number }> = {
+      grass:  { center: 0x1a2e14, edge: 0x0a1408 },
+      stone:  { center: 0x2a2828, edge: 0x101010 },
+      water:  { center: 0x0a1828, edge: 0x040810 },
+      sand:   { center: 0x2a2418, edge: 0x101008 },
+      dirt:   { center: 0x1e1810, edge: 0x0a0804 },
+      lava:   { center: 0x1a0800, edge: 0x0a0400 },
+      wood:   { center: 0x1a1408, edge: 0x0a0804 },
+      roof:   { center: 0x1a1010, edge: 0x0a0808 },
+    };
+
+    const colors = terrainColors[dominantTerrain] || terrainColors.grass;
+
+    // Calculate map center in screen coords
+    const centerScreen = worldToScreen(
+      map.width / 2, map.height / 2, 0,
+      this.camera.rotation, map.width, map.height
+    );
+
+    // Create a large ground plane well beyond map boundaries
+    const extend = 2000; // pixels beyond map in all directions
+    const bg = new PIXI.Graphics();
+
+    // Outer dark rectangle
+    bg.rect(
+      centerScreen.px - extend,
+      centerScreen.py - extend,
+      extend * 2,
+      extend * 2
+    );
+    bg.fill(colors.edge);
+
+    // Inner lighter rectangle (simulates radial gradient with concentric rects)
+    const steps = 8;
+    for (let i = steps; i >= 0; i--) {
+      const t = i / steps;
+      const size = extend * (0.3 + 0.7 * t);
+      const alpha = 0.15 * (1 - t); // More transparent toward edges
+
+      bg.rect(
+        centerScreen.px - size,
+        centerScreen.py - size,
+        size * 2,
+        size * 2
+      );
+      bg.fill({ color: colors.center, alpha: 1 - t * 0.6 });
+    }
+
+    // Add subtle fog/shadow at map edges using a semi-transparent overlay
+    // that fades from transparent at center to darker at edges
+    const fogOverlay = new PIXI.Graphics();
+    const fogExtend = 600;
+    const fogSteps = 6;
+    for (let i = fogSteps; i >= 1; i--) {
+      const t = i / fogSteps;
+      const size = fogExtend * t;
+      fogOverlay.rect(
+        centerScreen.px - size,
+        centerScreen.py - size,
+        size * 2,
+        size * 2
+      );
+      fogOverlay.fill({ color: 0x000000, alpha: 0.04 * t });
+    }
+
+    this.backgroundLayer.addChild(bg);
+    this.backgroundLayer.addChild(fogOverlay);
   }
 
   private redrawRangeOverlays(): void {
