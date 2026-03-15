@@ -15,15 +15,88 @@ import {
   type BattleUnit,
 } from '@/battle/battle-manager';
 import { BattleHUD } from '@/ui/battle-hud';
-import { createOrbonneMonastery } from '@/data/maps/orbonne-monastery';
+import { TitleScreen } from '@/ui/title-screen';
+import { WorldMapUI } from '@/ui/world-map-ui';
+import { FormationUI } from '@/ui/formation-ui';
+import { BattleResults, type UnitRewardInfo, type BattleResultsData } from '@/ui/battle-results';
+import { DamageNumberRenderer, type DamageNumberType } from '@/rendering/damage-numbers';
+import { ParticleSystem } from '@/rendering/particle-system';
 import { preloadAllSprites } from '@/rendering/sprite-loader';
 import { audio } from '@/core/audio';
+import {
+  type GameState,
+  createNewGameState,
+  loadGameState,
+  saveGameState,
+} from '@/story/story-flags';
+import { WorldMap } from '@/overworld/world-map';
+import { getBattle, CHAPTERS, type StoryBattle } from '@/data/campaign';
+import { JOBS } from '@/data/jobs';
+import { Direction } from '@/core/constants';
+import type { WeaponCategory } from '@/battle/damage-calc';
+import type { StatusId } from '@/battle/status-effects';
+
+// Map factory imports
+import { createOrbonneMonastery } from '@/data/maps/orbonne-monastery';
+import { createMagicCityGariland } from '@/data/maps/magic-city-gariland';
+import { createSweegyWoods } from '@/data/maps/sweegy-woods';
+import { createDorterTradeCity } from '@/data/maps/dorter-trade-city';
+
+import { dialogueManager } from '@/story/dialogue';
+import { DialogueBoxUI } from '@/ui/dialogue-box';
+
+// ─── Scene types ───
+
+type GameScene = 'title' | 'world_map' | 'formation' | 'battle' | 'battle_results' | 'dialogue';
+
+// ─── Map ID to factory ───
+
+const MAP_FACTORIES: Record<string, () => import('@/data/maps/map-types').BattleMapData> = {
+  'orbonne-monastery': createOrbonneMonastery,
+  'magic-city-gariland': createMagicCityGariland,
+  'sweegy-woods': createSweegyWoods,
+  'dorter-trade-city': createDorterTradeCity,
+};
+
+// ─── Fade overlay helper ───
+
+function createFadeOverlay(): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = `
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: #000;
+    z-index: 3000;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  `;
+  document.body.appendChild(el);
+  return el;
+}
+
+function fadeOut(overlay: HTMLDivElement): Promise<void> {
+  return new Promise((resolve) => {
+    overlay.style.opacity = '1';
+    overlay.style.pointerEvents = 'auto';
+    setTimeout(resolve, 400);
+  });
+}
+
+function fadeIn(overlay: HTMLDivElement): Promise<void> {
+  return new Promise((resolve) => {
+    overlay.style.opacity = '0';
+    overlay.style.pointerEvents = 'none';
+    setTimeout(resolve, 400);
+  });
+}
 
 export class Game {
   private app: PIXI.Application;
   private camera: Camera;
   private input: InputManager;
-  private battle: BattleManager;
+  private battle: BattleManager | null = null;
   private hud: BattleHUD;
 
   // Rendering layers
@@ -33,16 +106,49 @@ export class Game {
   private unitLayer!: PIXI.Container;
   private cursorGraphic!: PIXI.Graphics;
 
+  // Visual effects
+  private damageNumbers: DamageNumberRenderer;
+  private particles: ParticleSystem;
+
+  // UI screens
+  private titleScreen: TitleScreen;
+  private worldMapUI: WorldMapUI;
+  private formationUI: FormationUI;
+  private battleResultsUI: BattleResults;
+  private dialogueBox: DialogueBoxUI;
+  private fadeOverlay: HTMLDivElement;
+
+  // Game state
+  private currentScene: GameScene = 'title';
+  private gameState: GameState | null = null;
+  private worldMap: WorldMap;
+  private currentBattle: StoryBattle | null = null;
+  private deployedUnitIds: string[] = [];
+
   private hoveredTile: { x: number; y: number } | null = null;
   private lastRotation: CameraRotation = CameraRotation.R0;
   private needsRedraw = true;
+  private lastDamageDisplayCount = 0;
+
+  // Track scene after dialogue ends
+  private postDialogueAction: (() => void) | null = null;
 
   constructor() {
     this.app = new PIXI.Application();
     this.camera = new Camera();
-    this.input = null as any; // Set in init()
-    this.battle = null as any;
+    this.input = null as any;
     this.hud = null as any;
+    this.damageNumbers = new DamageNumberRenderer();
+    this.particles = new ParticleSystem();
+    this.worldMap = new WorldMap();
+
+    // Create UI screens
+    this.titleScreen = new TitleScreen();
+    this.worldMapUI = new WorldMapUI(this.worldMap);
+    this.formationUI = new FormationUI();
+    this.battleResultsUI = new BattleResults();
+    this.dialogueBox = new DialogueBoxUI();
+    this.fadeOverlay = createFadeOverlay();
   }
 
   async init(): Promise<void> {
@@ -51,7 +157,7 @@ export class Game {
     await this.app.init({
       resizeTo: container,
       backgroundColor: 0x1a1a2e,
-      antialias: false, // Pixel art style
+      antialias: false,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     });
@@ -70,36 +176,163 @@ export class Game {
     this.worldContainer.addChild(this.tileLayer);
     this.worldContainer.addChild(this.rangeLayer);
     this.worldContainer.addChild(this.unitLayer);
+    this.worldContainer.addChild(this.damageNumbers.container);
+    this.worldContainer.addChild(this.particles.container);
     this.worldContainer.addChild(this.cursorGraphic);
     this.app.stage.addChild(this.worldContainer);
 
-    // Preload any available sprite sheets (non-blocking, falls back gracefully)
+    // Preload sprites
     await preloadAllSprites();
 
     // Initialize audio
     await audio.init();
 
-    // Initialize battle
-    this.initBattle();
-
-    // Initialize HUD
+    // Initialize HUD (hidden until battle)
     const overlay = document.getElementById('ui-overlay')!;
     this.hud = new BattleHUD(overlay);
     this.hud.setActionCallback((action) => this.handleAction(action));
 
-    // Center camera on map
-    const map = this.battle.state.map;
+    // Setup UI callbacks
+    this.setupUICallbacks();
+
+    // Start game loop
+    this.app.ticker.add(() => this.update());
+
+    // Show title screen
+    this.showTitleScreen();
+  }
+
+  // ─── Scene Management ───
+
+  private async transitionTo(scene: GameScene, setup: () => void): Promise<void> {
+    await fadeOut(this.fadeOverlay);
+    setup();
+    this.currentScene = scene;
+    await fadeIn(this.fadeOverlay);
+  }
+
+  private showTitleScreen(): void {
+    this.currentScene = 'title';
+    this.worldContainer.visible = false;
+    const hasSave = loadGameState() !== null;
+    this.titleScreen.show(hasSave);
+  }
+
+  private showWorldMap(): void {
+    if (!this.gameState) return;
+    this.worldContainer.visible = false;
+    this.worldMap.setCurrentNode(this.gameState.currentNode);
+    this.worldMapUI.show(this.gameState);
+  }
+
+  private showFormation(battle: StoryBattle): void {
+    if (!this.gameState) return;
+    this.currentBattle = battle;
+    const availableUnits = this.gameState.roster.getAllUnits();
+    this.formationUI.show(battle, availableUnits);
+  }
+
+  private startBattle(battle: StoryBattle, deployedIds: string[]): void {
+    if (!this.gameState) return;
+
+    this.deployedUnitIds = deployedIds;
+
+    // Get map factory
+    const factory = MAP_FACTORIES[battle.mapId];
+    if (!factory) {
+      console.error(`Unknown map: ${battle.mapId}`);
+      return;
+    }
+    const map = factory();
+
+    // Create player units from roster
+    const playerUnits: BattleUnit[] = [];
+    for (let i = 0; i < deployedIds.length; i++) {
+      const rosterUnit = this.gameState.roster.getUnit(deployedIds[i]);
+      if (!rosterUnit || i >= map.playerStartPositions.length) continue;
+
+      const pos = map.playerStartPositions[i];
+      const job = JOBS[rosterUnit.jobId];
+
+      playerUnits.push(createBattleUnit(
+        rosterUnit.id,
+        rosterUnit.name,
+        'player',
+        pos.x,
+        pos.y,
+        {
+          jobName: rosterUnit.jobName,
+          maxHP: rosterUnit.maxHP,
+          currentHP: rosterUnit.maxHP,
+          maxMP: rosterUnit.maxMP,
+          currentMP: rosterUnit.maxMP,
+          pa: rosterUnit.pa,
+          ma: rosterUnit.ma,
+          speed: rosterUnit.speed,
+          move: rosterUnit.move,
+          jump: rosterUnit.jump,
+          brave: rosterUnit.brave,
+          faith: rosterUnit.faith,
+          weaponPower: 5 + Math.floor(rosterUnit.level * 1.5),
+          weaponCategory: (job?.equippableWeapons?.[0] ?? 'sword') as WeaponCategory,
+          attackRange: job?.equippableWeapons?.[0] === 'bow' ? 4 : job?.equippableWeapons?.[0] === 'staff' ? 3 : 1,
+        }
+      ));
+    }
+
+    // Create enemy units from battle definition
+    const enemyUnits: BattleUnit[] = battle.enemyFormation.map((config, i) => {
+      const job = JOBS[config.jobId];
+      const name = config.name ?? `Enemy ${i + 1}`;
+      const baseHP = 80 + config.level * 12;
+      const baseMP = 20 + config.level * 3;
+      const basePA = 6 + Math.floor(config.level * 0.8);
+      const baseMA = 5 + Math.floor(config.level * 0.6);
+      const baseSpeed = 5 + Math.floor(config.level * 0.4);
+
+      return createBattleUnit(
+        `enemy_${i}`,
+        name,
+        'enemy',
+        config.position.x,
+        config.position.y,
+        {
+          jobName: job?.name ?? config.jobId,
+          maxHP: job ? Math.floor(baseHP * job.hpMult) : baseHP,
+          currentHP: job ? Math.floor(baseHP * job.hpMult) : baseHP,
+          maxMP: job ? Math.floor(baseMP * job.mpMult) : baseMP,
+          currentMP: job ? Math.floor(baseMP * job.mpMult) : baseMP,
+          pa: job ? Math.floor(basePA * job.paMult) : basePA,
+          ma: job ? Math.floor(baseMA * job.maMult) : baseMA,
+          speed: job ? Math.floor(baseSpeed * job.speedMult) : baseSpeed,
+          move: job?.moveBase ?? 4,
+          jump: job?.jumpBase ?? 3,
+          weaponPower: 4 + Math.floor(config.level * 1.2),
+          weaponCategory: (job?.equippableWeapons?.[0] ?? 'sword') as WeaponCategory,
+          attackRange: job?.equippableWeapons?.[0] === 'bow' ? 4 : job?.equippableWeapons?.[0] === 'staff' ? 3 : 1,
+        }
+      );
+    });
+
+    const allUnits = [...playerUnits, ...enemyUnits];
+    this.battle = new BattleManager(map, allUnits);
+
+    // Setup rendering
+    this.worldContainer.visible = true;
+    this.needsRedraw = true;
+    this.lastDamageDisplayCount = 0;
+
+    // Center camera
     const center = worldToScreen(
       map.width / 2, map.height / 2, 2,
       this.camera.rotation, map.width, map.height
     );
     this.camera.centerOn(this.app.screen.width, this.app.screen.height, center.px, center.py);
 
-    // Start game loop
-    this.app.ticker.add(() => this.update());
-
-    // Start battle + BGM (BGM starts on first user click due to autoplay policy)
+    // Start battle
     this.battle.startBattle();
+
+    // Start BGM
     const startBgm = () => {
       audio.playBgm('battle');
       document.removeEventListener('click', startBgm);
@@ -107,51 +340,212 @@ export class Game {
     };
     document.addEventListener('click', startBgm);
     document.addEventListener('keydown', startBgm);
+    // Try playing immediately (works if user has already interacted)
+    audio.playBgm('battle');
   }
 
-  private initBattle(): void {
-    const map = createOrbonneMonastery();
+  private showBattleResults(): void {
+    if (!this.gameState || !this.currentBattle) return;
 
-    const units: BattleUnit[] = [
-      // Player units
-      createBattleUnit('p1', 'Ramza', 'player', map.playerStartPositions[0].x, map.playerStartPositions[0].y, {
-        jobName: 'Ramza', maxHP: 120, currentHP: 120, pa: 9, speed: 7, move: 4, jump: 3, weaponPower: 6,
-      }),
-      createBattleUnit('p2', 'Delita', 'player', map.playerStartPositions[1].x, map.playerStartPositions[1].y, {
-        jobName: 'Knight', maxHP: 140, currentHP: 140, pa: 10, ma: 5, speed: 5, move: 3, jump: 3, weaponPower: 8,
-      }),
-      createBattleUnit('p3', 'Alma', 'player', map.playerStartPositions[2].x, map.playerStartPositions[2].y, {
-        jobName: 'White Mage', maxHP: 80, currentHP: 80, pa: 5, ma: 10, speed: 6, move: 3, jump: 3, weaponPower: 3, attackRange: 3,
-      }),
-      createBattleUnit('p4', 'Rad', 'player', map.playerStartPositions[3].x, map.playerStartPositions[3].y, {
-        jobName: 'Archer', maxHP: 90, currentHP: 90, pa: 8, speed: 6, move: 4, jump: 3, weaponPower: 5, attackRange: 4,
-      }),
+    const battle = this.currentBattle;
+    const rewards = battle.rewards;
 
-      // Enemy units
-      createBattleUnit('e1', 'Knight A', 'enemy', map.enemyStartPositions[0].x, map.enemyStartPositions[0].y, {
-        jobName: 'Knight', maxHP: 110, currentHP: 110, pa: 9, speed: 5, move: 3, jump: 3, weaponPower: 7,
-      }),
-      createBattleUnit('e2', 'Knight B', 'enemy', map.enemyStartPositions[1].x, map.enemyStartPositions[1].y, {
-        jobName: 'Knight', maxHP: 100, currentHP: 100, pa: 8, speed: 5, move: 3, jump: 3, weaponPower: 6,
-      }),
-      createBattleUnit('e3', 'Archer C', 'enemy', map.enemyStartPositions[2].x, map.enemyStartPositions[2].y, {
-        jobName: 'Archer', maxHP: 85, currentHP: 85, pa: 7, speed: 6, move: 4, jump: 3, weaponPower: 5, attackRange: 4,
-      }),
-      createBattleUnit('e4', 'Mage D', 'enemy', map.enemyStartPositions[3].x, map.enemyStartPositions[3].y, {
-        jobName: 'Black Mage', maxHP: 70, currentHP: 70, pa: 4, ma: 10, speed: 7, move: 3, jump: 3, weaponPower: 4, attackRange: 3,
-      }),
-    ];
+    // Calculate rewards per unit
+    const unitRewards: UnitRewardInfo[] = [];
+    const baseExp = 20 + (battle.chapter * 10);
+    const baseJP = 10 + (battle.chapter * 5);
 
-    this.battle = new BattleManager(map, units);
+    for (const unitId of this.deployedUnitIds) {
+      const rosterUnit = this.gameState.roster.getUnit(unitId);
+      if (!rosterUnit) continue;
+
+      const expResult = this.gameState.roster.awardExp(unitId, baseExp);
+      this.gameState.roster.awardJP(unitId, rosterUnit.jobId, baseJP);
+
+      unitRewards.push({
+        name: rosterUnit.name,
+        jobName: rosterUnit.jobName,
+        expGained: baseExp,
+        jpGained: baseJP,
+        leveledUp: expResult.leveled,
+        newLevel: expResult.newLevel,
+      });
+    }
+
+    // Award gold
+    this.gameState.inventory.gold += rewards.gold;
+
+    // Mark battle complete
+    this.gameState.completedBattles.add(battle.id);
+    this.gameState.currentNode = this.worldMap.getCurrentNodeId();
+
+    // Check chapter advancement
+    const currentChapter = CHAPTERS.find((c) => c.number === this.gameState!.currentChapter);
+    if (currentChapter) {
+      const allRequired = currentChapter.battles.filter((b) => b.isRequired);
+      const allDone = allRequired.every((b) => this.gameState!.completedBattles.has(b.id));
+      if (allDone && this.gameState.currentChapter < CHAPTERS.length) {
+        this.gameState.currentChapter += 1;
+      }
+    }
+
+    // Auto-save
+    saveGameState(this.gameState);
+
+    const resultsData: BattleResultsData = {
+      battleName: battle.name,
+      goldEarned: rewards.gold,
+      itemsFound: rewards.items,
+      unitRewards,
+    };
+
+    this.battleResultsUI.show(resultsData);
   }
+
+  // ─── UI Callbacks ───
+
+  private setupUICallbacks(): void {
+    // Title screen
+    this.titleScreen.setOnSelect((action) => {
+      audio.playSfx('confirm');
+      if (action === 'new_game') {
+        this.gameState = createNewGameState();
+        this.transitionTo('world_map', () => {
+          this.titleScreen.hide();
+          this.showWorldMap();
+        });
+      } else if (action === 'continue') {
+        const saved = loadGameState();
+        if (saved) {
+          this.gameState = saved;
+          this.transitionTo('world_map', () => {
+            this.titleScreen.hide();
+            this.showWorldMap();
+          });
+        }
+      }
+    });
+
+    // World map
+    this.worldMapUI.setOnNodeSelect((nodeId) => {
+      if (!this.gameState) return;
+      audio.playSfx('confirm');
+
+      const node = this.worldMap.getNode(nodeId);
+      if (!node) return;
+
+      // Travel to the node
+      if (nodeId !== this.worldMap.getCurrentNodeId()) {
+        this.worldMap.travelTo(nodeId, this.gameState);
+      }
+      this.worldMap.setCurrentNode(nodeId);
+      this.gameState.currentNode = nodeId;
+
+      if (node.type === 'story_battle' && node.battleId) {
+        const battle = getBattle(node.battleId);
+        if (battle) {
+          this.transitionTo('formation', () => {
+            this.worldMapUI.hide();
+            this.showFormation(battle);
+          });
+        }
+      } else if (node.type === 'random_encounter') {
+        // For random encounters, use the nearest story battle's formation or a generic one
+        // For now, treat them as travel-only nodes — just refresh the map
+        this.worldMapUI.hide();
+        this.showWorldMap();
+      } else if (node.type === 'town') {
+        // Towns are just stops; refresh map
+        this.worldMapUI.hide();
+        this.showWorldMap();
+      }
+    });
+
+    // Formation
+    this.formationUI.setOnStart((selectedIds) => {
+      if (!this.currentBattle) return;
+      audio.playSfx('confirm');
+
+      this.transitionTo('battle', () => {
+        this.formationUI.hide();
+        this.startBattle(this.currentBattle!, selectedIds);
+      });
+    });
+
+    this.formationUI.setOnBack(() => {
+      audio.playSfx('cancel');
+      this.transitionTo('world_map', () => {
+        this.formationUI.hide();
+        this.currentBattle = null;
+        this.showWorldMap();
+      });
+    });
+
+    // Battle results
+    this.battleResultsUI.setOnContinue(() => {
+      audio.playSfx('confirm');
+      audio.stopBgm(300);
+
+      this.transitionTo('world_map', () => {
+        this.battleResultsUI.hide();
+        this.battle = null;
+        this.currentBattle = null;
+        this.worldContainer.visible = false;
+        this.damageNumbers.clear();
+        this.particles.clear();
+        this.showWorldMap();
+      });
+    });
+
+    // Dialogue box
+    this.dialogueBox.setOnAdvance(() => {
+      const advanced = dialogueManager.advance();
+      if (!advanced) {
+        // Dialogue ended
+        this.dialogueBox.hide();
+        this.postDialogueAction?.();
+        this.postDialogueAction = null;
+      }
+    });
+
+    this.dialogueBox.setOnChoice((index) => {
+      dialogueManager.selectChoice(index);
+    });
+
+    dialogueManager.onLineChange = (line) => {
+      this.dialogueBox.show(line);
+      if (line.choices && line.choices.length > 0) {
+        this.dialogueBox.showChoices(line.choices);
+      }
+    };
+
+    dialogueManager.onEnd = () => {
+      this.dialogueBox.hide();
+      this.postDialogueAction?.();
+      this.postDialogueAction = null;
+    };
+  }
+
+  // ─── Game Loop ───
 
   private update(): void {
+    const dt = this.app.ticker.deltaMS / 1000;
+
+    // Update effects regardless of scene
+    this.damageNumbers.update(dt);
+    this.particles.update(dt);
+
+    if (this.currentScene !== 'battle' || !this.battle) {
+      this.input.endFrame();
+      return;
+    }
+
     const state = this.battle.state;
 
     // Update camera
     this.camera.update(this.input, this.app.screen.width, this.app.screen.height);
 
-    // Check if rotation changed
+    // Check rotation change
     if (this.camera.rotation !== this.lastRotation) {
       this.lastRotation = this.camera.rotation;
       this.needsRedraw = true;
@@ -176,13 +570,14 @@ export class Game {
       audio.toggleMute();
     }
 
-    // Handle click
+    // Handle Escape
     if (this.input.isKeyJustPressed('Escape')) {
       audio.playSfx('cancel');
       this.battle.cancel();
       this.needsRedraw = true;
     }
 
+    // Handle click
     if (inputState.mouseJustPressed && this.hoveredTile) {
       this.handleTileClick(this.hoveredTile.x, this.hoveredTile.y);
     }
@@ -195,13 +590,16 @@ export class Game {
       if (this.input.isKeyJustPressed('ArrowLeft')) { this.battle.confirmFacing(3); this.needsRedraw = true; }
     }
 
+    // Process new damage displays -> spawn visual effects
+    this.processDamageDisplays();
+
     // Redraw world
     this.redrawWorld();
 
-    // Update cursor position
+    // Update cursor
     this.updateCursor();
 
-    // Apply camera transform to world container
+    // Apply camera transform
     this.worldContainer.x = this.camera.x;
     this.worldContainer.y = this.camera.y;
     this.worldContainer.scale.set(this.camera.zoom);
@@ -209,22 +607,125 @@ export class Game {
     // Update HUD
     this.hud.update(state, this.hoveredTile);
 
+    // Check for battle end
+    this.checkBattleEnd();
+
     this.input.endFrame();
   }
 
+  private processDamageDisplays(): void {
+    if (!this.battle) return;
+
+    const displays = this.battle.state.damageDisplay;
+    while (this.lastDamageDisplayCount < displays.length) {
+      const dd = displays[this.lastDamageDisplayCount];
+      this.lastDamageDisplayCount++;
+
+      // Find the unit to get its screen position
+      const unit = this.battle.state.units.find((u) => u.id === dd.targetId);
+      if (!unit) continue;
+
+      const h = this.battle.state.map.tiles[unit.x]?.[unit.y]?.height ?? 0;
+      const screen = worldToScreen(
+        unit.x, unit.y, h,
+        this.camera.rotation,
+        this.battle.state.map.width,
+        this.battle.state.map.height
+      );
+
+      // Determine damage number type
+      let dmgType: DamageNumberType = 'normal';
+      if (dd.isMiss) dmgType = 'miss';
+      else if (dd.isHealing) dmgType = 'healing';
+      else if (dd.isCritical) dmgType = 'critical';
+
+      this.damageNumbers.addDamageNumber(screen.px, screen.py - 20, dd.amount, dmgType);
+
+      // Spawn particle effect
+      if (dd.isMiss) {
+        // No particles for miss
+      } else if (dd.isHealing) {
+        this.particles.spawnEffect('heal', screen.px, screen.py - 10);
+      } else if (dd.isCritical) {
+        this.particles.spawnEffect('hit', screen.px, screen.py - 10);
+        this.particles.spawnEffect('fire', screen.px, screen.py - 10);
+      } else {
+        this.particles.spawnEffect('hit', screen.px, screen.py - 10);
+      }
+
+      // Check if unit died
+      if (unit && !unit.isAlive) {
+        this.particles.spawnEffect('death', screen.px, screen.py - 10);
+      }
+    }
+  }
+
+  private checkBattleEnd(): void {
+    if (!this.battle) return;
+    const phase = this.battle.state.phase;
+
+    if (phase === 'battle_won' && this.currentScene === 'battle') {
+      this.currentScene = 'battle_results';
+      audio.stopBgm(300);
+      setTimeout(() => audio.playBgm('victory'), 500);
+
+      // Show results after a delay
+      setTimeout(() => {
+        this.showBattleResults();
+      }, 2000);
+    } else if (phase === 'battle_lost' && this.currentScene === 'battle') {
+      this.currentScene = 'battle_results';
+      audio.stopBgm(300);
+      setTimeout(() => audio.playBgm('gameover'), 500);
+
+      // Show defeat screen
+      setTimeout(() => {
+        this.battleResultsUI.showDefeat(
+          () => {
+            // Retry
+            audio.playSfx('confirm');
+            audio.stopBgm(300);
+            this.battleResultsUI.hide();
+            if (this.currentBattle && this.deployedUnitIds.length > 0) {
+              this.transitionTo('battle', () => {
+                this.damageNumbers.clear();
+                this.particles.clear();
+                this.startBattle(this.currentBattle!, this.deployedUnitIds);
+              });
+            }
+          },
+          () => {
+            // Quit to world map
+            audio.playSfx('cancel');
+            audio.stopBgm(300);
+            this.transitionTo('world_map', () => {
+              this.battleResultsUI.hide();
+              this.battle = null;
+              this.currentBattle = null;
+              this.worldContainer.visible = false;
+              this.damageNumbers.clear();
+              this.particles.clear();
+              this.showWorldMap();
+            });
+          }
+        );
+      }, 2000);
+    }
+  }
+
+  // ─── Rendering ───
+
   private redrawWorld(): void {
-    // Redraw tiles (only when rotation changes or first frame)
     if (this.needsRedraw) {
       this.needsRedraw = false;
       this.redrawTiles();
       this.redrawRangeOverlays();
     }
-
-    // Always redraw units (they move)
     this.redrawUnits();
   }
 
   private redrawTiles(): void {
+    if (!this.battle) return;
     this.tileLayer.removeChildren();
     const state = this.battle.state;
     const tiles = createMapTiles(state.map, this.camera.rotation);
@@ -234,6 +735,7 @@ export class Game {
   }
 
   private redrawRangeOverlays(): void {
+    if (!this.battle) return;
     this.rangeLayer.removeChildren();
     const state = this.battle.state;
 
@@ -257,6 +759,7 @@ export class Game {
   }
 
   private redrawUnits(): void {
+    if (!this.battle) return;
     this.unitLayer.removeChildren();
     const state = this.battle.state;
 
@@ -282,7 +785,6 @@ export class Game {
       state.map.height
     );
 
-    // Sort by depth and add
     sprites.sort((a, b) => a.depth - b.depth);
     for (const sprite of sprites) {
       this.unitLayer.addChild(sprite.container);
@@ -290,7 +792,7 @@ export class Game {
   }
 
   private updateCursor(): void {
-    if (!this.hoveredTile) {
+    if (!this.battle || !this.hoveredTile) {
       this.cursorGraphic.visible = false;
       return;
     }
@@ -309,7 +811,10 @@ export class Game {
     this.cursorGraphic.visible = true;
   }
 
+  // ─── Input Handling ───
+
   private handleTileClick(x: number, y: number): void {
+    if (!this.battle) return;
     const state = this.battle.state;
 
     switch (state.phase) {
@@ -321,7 +826,6 @@ export class Game {
         break;
 
       case 'select_target': {
-        // Find the target to check weapon type before attacking
         const targetUnit = this.battle.state.units.find(
           (u) => u.x === x && u.y === y && u.isAlive
         );
@@ -329,32 +833,25 @@ export class Game {
         const isMagicAttack = attackingUnit?.weaponCategory === 'staff' || attackingUnit?.weaponCategory === 'rod';
 
         if (this.battle.confirmAttack(x, y)) {
-          // Check the last damage result to see if it was a miss
           const lastResult = targetUnit?.lastDamageResult;
           const wasMiss = lastResult && lastResult.isMiss;
 
           if (wasMiss) {
-            // No attack SFX on a miss — just a whoosh/cancel
             audio.playSfx('cancel');
           } else {
-            // Play appropriate SFX
             if (isMagicAttack) {
               audio.playSfx('magic');
             } else {
               audio.playAttack();
             }
-            // Play hit sound after a short delay
             setTimeout(() => audio.playSfx('hit'), 200);
           }
 
-          // Check if the target died
           if (targetUnit && !targetUnit.isAlive) {
             setTimeout(() => audio.playSfx('death'), 300);
           }
 
           this.needsRedraw = true;
-          // Check for battle end BGM
-          setTimeout(() => this.checkBattleEndAudio(), 400);
         }
         break;
       }
@@ -376,12 +873,13 @@ export class Game {
     const dx = toX - fromX;
     const dy = toY - fromY;
     if (Math.abs(dx) >= Math.abs(dy)) {
-      return dx >= 0 ? 1 : 3; // East or West
+      return dx >= 0 ? 1 : 3;
     }
-    return dy >= 0 ? 2 : 0; // South or North
+    return dy >= 0 ? 2 : 0;
   }
 
   private handleAction(action: string): void {
+    if (!this.battle) return;
     audio.playSfx('select');
     switch (action) {
       case 'move':
@@ -400,17 +898,6 @@ export class Game {
         this.battle.cancel();
         this.needsRedraw = true;
         break;
-    }
-  }
-
-  private checkBattleEndAudio(): void {
-    const phase = this.battle.state.phase;
-    if (phase === 'battle_won') {
-      audio.stopBgm(300);
-      setTimeout(() => audio.playBgm('victory'), 500);
-    } else if (phase === 'battle_lost') {
-      audio.stopBgm(300);
-      setTimeout(() => audio.playBgm('gameover'), 500);
     }
   }
 }
