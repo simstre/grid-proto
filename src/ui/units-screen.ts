@@ -411,91 +411,238 @@ export class UnitsScreen {
 
   private renderJobTab(parent: HTMLElement, unit: RosterUnit): void {
     const currentJobLabel = document.createElement('div');
-    currentJobLabel.style.cssText = `font-size:10px;color:${UI.ctGold};margin-bottom:12px;`;
+    currentJobLabel.style.cssText = `font-size:10px;color:${UI.ctGold};margin-bottom:8px;`;
     currentJobLabel.textContent = `Current Job: ${unit.jobName}`;
     parent.appendChild(currentJobLabel);
 
-    const grid = document.createElement('div');
-    grid.style.cssText = `
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
-    `;
-    parent.appendChild(grid);
+    // ─── Flowchart layout ───
+    // Manually positioned nodes matching FFT's prerequisite tree.
+    // Two "branches": physical (from Squire) and magical (from Chemist),
+    // converging at advanced jobs.
 
-    const allJobIds = Object.keys(JOBS) as JobId[];
-    for (const jobId of allJobIds) {
-      const job = JOBS[jobId];
-      const isCurrent = jobId === unit.jobId;
-      const isUnlocked = canUnlockJob(jobId, unit.jobJP);
-      const jp = unit.jobJP[jobId] ?? 0;
+    const chart = document.createElement('div');
+    chart.style.cssText = `
+      position: relative;
+      width: 100%;
+      height: 480px;
+      overflow: auto;
+    `;
+    parent.appendChild(chart);
+
+    // SVG layer for connection arrows (behind nodes)
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
+    chart.appendChild(svg);
+
+    // Node positions: [jobId, col(0-7), row(0-5)]
+    // Physical branch (top)
+    // Magical branch (bottom)
+    // Advanced jobs merge in the middle-right
+    const NODE_W = 80;
+    const NODE_H = 52;
+    const COL_GAP = 100;
+    const ROW_GAP = 72;
+    const PAD_X = 10;
+    const PAD_Y = 10;
+
+    type NodePos = { jobId: JobId; col: number; row: number };
+    const positions: NodePos[] = [
+      // Col 0: Base jobs
+      { jobId: 'squire',    col: 0, row: 0 },
+      { jobId: 'chemist',   col: 0, row: 3 },
+      // Col 1: Tier 1
+      { jobId: 'knight',    col: 1, row: 0 },
+      { jobId: 'archer',    col: 1, row: 1 },
+      { jobId: 'whiteMage', col: 1, row: 3 },
+      { jobId: 'blackMage', col: 1, row: 4 },
+      // Col 2: Tier 2
+      { jobId: 'monk',      col: 2, row: 0 },
+      { jobId: 'thief',     col: 2, row: 1 },
+      { jobId: 'timeMage',  col: 2, row: 3 },
+      { jobId: 'oracle',    col: 2, row: 4 },
+      // Col 3: Tier 3
+      { jobId: 'geomancer', col: 3, row: 0 },
+      { jobId: 'dragoon',   col: 3, row: 1 },
+      { jobId: 'summoner',  col: 3, row: 3 },
+      { jobId: 'mediator',  col: 3, row: 4 },
+      // Col 4: Advanced
+      { jobId: 'samurai',   col: 4, row: 0 },
+      { jobId: 'ninja',     col: 4, row: 1 },
+      { jobId: 'calculator',col: 4, row: 3 },
+      // Col 5: Special
+      { jobId: 'dancer',    col: 5, row: 0.5 },
+      { jobId: 'bard',      col: 5, row: 3.5 },
+      { jobId: 'mime',      col: 5, row: 2 },
+    ];
+
+    const posMap = new Map<string, { cx: number; cy: number }>();
+
+    // Create job nodes
+    for (const pos of positions) {
+      const job = JOBS[pos.jobId];
+      if (!job) continue;
+
+      const x = PAD_X + pos.col * COL_GAP;
+      const y = PAD_Y + pos.row * ROW_GAP;
+      const cx = x + NODE_W / 2;
+      const cy = y + NODE_H / 2;
+      posMap.set(pos.jobId, { cx, cy });
+
+      const isCurrent = pos.jobId === unit.jobId;
+      const isUnlocked = canUnlockJob(pos.jobId, unit.jobJP);
+      const jp = unit.jobJP[pos.jobId] ?? 0;
       const level = getJobLevel(jp);
 
-      let borderColor = UI.borderDark;
-      let bgColor = 'rgba(0,0,0,0.2)';
+      let borderColor = '#333344';
+      let bgColor = 'rgba(0,0,0,0.3)';
       let textColor = '#555';
+      let shadow = 'none';
 
       if (isCurrent) {
         borderColor = UI.ctGold;
-        bgColor = 'rgba(216,176,64,0.12)';
+        bgColor = 'rgba(216,176,64,0.15)';
         textColor = UI.ctGold;
+        shadow = `0 0 8px ${UI.ctGold}44`;
       } else if (isUnlocked) {
-        borderColor = UI.hpGreen;
-        bgColor = 'rgba(64,200,64,0.06)';
+        borderColor = '#4a8a4a';
+        bgColor = 'rgba(64,200,64,0.08)';
         textColor = UI.text;
       }
 
-      const jobEl = document.createElement('div');
-      jobEl.style.cssText = `
-        padding: 8px 6px;
-        text-align: center;
+      const node = document.createElement('div');
+      node.style.cssText = `
+        position: absolute;
+        left: ${x}px; top: ${y}px;
+        width: ${NODE_W}px; height: ${NODE_H}px;
         border: 2px solid ${borderColor};
         background: ${bgColor};
+        box-shadow: ${shadow};
         cursor: ${isUnlocked && !isCurrent ? 'pointer' : 'default'};
-        transition: background 0.1s;
-        font-size: 8px;
-        position: relative;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 4px 2px;
+        transition: background 0.15s, box-shadow 0.15s;
+        z-index: 1;
       `;
 
-      // Name
       const nameEl = document.createElement('div');
-      nameEl.style.cssText = `color:${textColor};margin-bottom:4px;line-height:1.4;`;
+      nameEl.style.cssText = `color:${textColor};font-size:8px;line-height:1.3;margin-bottom:2px;`;
       nameEl.textContent = job.name;
-      jobEl.appendChild(nameEl);
+      node.appendChild(nameEl);
 
-      // JP / Level
       const jpEl = document.createElement('div');
       jpEl.style.cssText = `color:${UI.textDim};font-size:7px;`;
-      jpEl.textContent = isUnlocked || jp > 0 ? `Lv${level} ${jp}JP` : 'Locked';
-      jobEl.appendChild(jpEl);
+      if (isCurrent) {
+        jpEl.textContent = `Lv${level} · ${jp}JP`;
+        jpEl.style.color = UI.ctGold;
+      } else if (isUnlocked || jp > 0) {
+        jpEl.textContent = `Lv${level} · ${jp}JP`;
+      } else {
+        jpEl.textContent = 'Locked';
+        jpEl.style.color = '#444';
+      }
+      node.appendChild(jpEl);
 
+      // Gender restriction badge
+      if (job.genderRestriction) {
+        const badge = document.createElement('div');
+        badge.style.cssText = `font-size:6px;color:#886688;margin-top:1px;`;
+        badge.textContent = job.genderRestriction === 'female' ? '♀ only' : '♂ only';
+        node.appendChild(badge);
+      }
+
+      // Interactions
       if (isUnlocked && !isCurrent) {
-        jobEl.addEventListener('mouseenter', () => {
-          jobEl.style.background = UI.cursorHover;
+        node.addEventListener('mouseenter', () => {
+          node.style.background = 'rgba(255,232,136,0.12)';
+          node.style.boxShadow = `0 0 10px ${UI.ctGold}44`;
         });
-        jobEl.addEventListener('mouseleave', () => {
-          jobEl.style.background = bgColor;
+        node.addEventListener('mouseleave', () => {
+          node.style.background = bgColor;
+          node.style.boxShadow = shadow;
         });
-        jobEl.addEventListener('click', () => {
+        node.addEventListener('click', () => {
           if (!this.gameState) return;
-          this.gameState.roster.changeJob(unit.id, jobId);
+          this.gameState.roster.changeJob(unit.id, pos.jobId);
           this.render();
         });
       }
 
-      // Tooltip for locked jobs
-      if (!isUnlocked) {
+      if (!isUnlocked && job.prerequisites.length > 0) {
         const reqs = job.prerequisites.map(p => {
-          const prereqJob = JOBS[p.jobId];
-          return `${prereqJob.name} Lv${p.level}`;
-        }).join(', ');
-
-        if (reqs) {
-          jobEl.title = `Requires: ${reqs}`;
-        }
+          const pj = JOBS[p.jobId];
+          return `${pj.name} Lv${p.level}`;
+        }).join('\n');
+        node.title = `Requires:\n${reqs}`;
       }
 
-      grid.appendChild(jobEl);
+      chart.appendChild(node);
+    }
+
+    // Draw connection arrows
+    const allJobIds = Object.keys(JOBS) as JobId[];
+    for (const jobId of allJobIds) {
+      const job = JOBS[jobId];
+      const to = posMap.get(jobId);
+      if (!to || !job.prerequisites.length) continue;
+
+      for (const prereq of job.prerequisites) {
+        const from = posMap.get(prereq.jobId);
+        if (!from) continue;
+
+        const isUnlocked = canUnlockJob(jobId, unit.jobJP);
+        const prereqMet = (unit.jobJP[prereq.jobId] ?? 0) >= (JP_LEVEL_THRESHOLDS[prereq.level - 1] ?? 0);
+
+        // Arrow color: green if prerequisite met, dim if not
+        const color = prereqMet ? '#4a8a4a' : '#333344';
+
+        // Draw line
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', String(from.cx));
+        line.setAttribute('y1', String(from.cy));
+        line.setAttribute('x2', String(to.cx));
+        line.setAttribute('y2', String(to.cy));
+        line.setAttribute('stroke', color);
+        line.setAttribute('stroke-width', prereqMet ? '2' : '1');
+        line.setAttribute('stroke-dasharray', prereqMet ? '' : '4,3');
+        svg.appendChild(line);
+
+        // Arrowhead
+        const dx = to.cx - from.cx;
+        const dy = to.cy - from.cy;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 1) continue;
+        const ux = dx / len;
+        const uy = dy / len;
+        // Arrow tip: stop at node edge
+        const tipX = to.cx - ux * (NODE_W / 2 + 2);
+        const tipY = to.cy - uy * (NODE_H / 2 + 2);
+        const arrSize = 6;
+        const px = -uy * arrSize;
+        const py = ux * arrSize;
+
+        const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        arrow.setAttribute('points',
+          `${tipX},${tipY} ${tipX - ux * arrSize + px},${tipY - uy * arrSize + py} ${tipX - ux * arrSize - px},${tipY - uy * arrSize - py}`
+        );
+        arrow.setAttribute('fill', color);
+        svg.appendChild(arrow);
+
+        // Level requirement label on the line
+        const midX = (from.cx + to.cx) / 2;
+        const midY = (from.cy + to.cy) / 2;
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', String(midX));
+        label.setAttribute('y', String(midY - 4));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('fill', prereqMet ? '#6aaa6a' : '#555');
+        label.setAttribute('font-size', '7');
+        label.setAttribute('font-family', "'Press Start 2P', monospace");
+        label.textContent = `Lv${prereq.level}`;
+        svg.appendChild(label);
+      }
     }
   }
 
