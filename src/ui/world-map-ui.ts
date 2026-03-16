@@ -64,6 +64,7 @@ export class WorldMapUI {
   private worldMap: WorldMap;
   private onNodeSelect: ((nodeId: string) => void) | null = null;
   private onSave: (() => void) | null = null;
+  private onUnits: (() => void) | null = null;
 
   constructor(worldMap: WorldMap) {
     this.worldMap = worldMap;
@@ -159,6 +160,31 @@ export class WorldMapUI {
     `;
     goldEl.textContent = `${gameState.inventory.gold} Gil`;
     sidebar.appendChild(goldEl);
+
+    // Units button
+    const unitsBtn = document.createElement('div');
+    unitsBtn.style.cssText = `
+      text-align: center;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 11px;
+      color: ${UI.text};
+      border: 2px solid ${UI.borderOuter};
+      background: rgba(0,0,0,0.3);
+      transition: background 0.15s;
+      margin-top: 12px;
+    `;
+    unitsBtn.textContent = 'Units';
+    unitsBtn.addEventListener('mouseenter', () => {
+      unitsBtn.style.background = UI.cursorHover;
+    });
+    unitsBtn.addEventListener('mouseleave', () => {
+      unitsBtn.style.background = 'rgba(0,0,0,0.3)';
+    });
+    unitsBtn.addEventListener('click', () => {
+      this.onUnits?.();
+    });
+    sidebar.appendChild(unitsBtn);
 
     // Spacer
     const spacer = document.createElement('div');
@@ -399,6 +425,10 @@ export class WorldMapUI {
 
   setOnSave(callback: () => void): void {
     this.onSave = callback;
+  }
+
+  setOnUnits(callback: () => void): void {
+    this.onUnits = callback;
   }
 
   destroy(): void {

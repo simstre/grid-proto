@@ -18,6 +18,7 @@ import { BattleHUD } from '@/ui/battle-hud';
 import { TitleScreen } from '@/ui/title-screen';
 import { WorldMapUI } from '@/ui/world-map-ui';
 import { FormationUI } from '@/ui/formation-ui';
+import { UnitsScreen } from '@/ui/units-screen';
 import { BattleResults, type UnitRewardInfo, type BattleResultsData } from '@/ui/battle-results';
 import { DamageNumberRenderer, type DamageNumberType } from '@/rendering/damage-numbers';
 import { ParticleSystem } from '@/rendering/particle-system';
@@ -47,7 +48,7 @@ import { DialogueBoxUI } from '@/ui/dialogue-box';
 
 // ─── Scene types ───
 
-type GameScene = 'title' | 'world_map' | 'formation' | 'battle' | 'battle_results' | 'dialogue';
+type GameScene = 'title' | 'world_map' | 'formation' | 'battle' | 'battle_results' | 'dialogue' | 'units';
 
 // ─── Map ID to factory ───
 
@@ -115,6 +116,7 @@ export class Game {
   private titleScreen: TitleScreen;
   private worldMapUI: WorldMapUI;
   private formationUI: FormationUI;
+  private unitsScreen: UnitsScreen;
   private battleResultsUI: BattleResults;
   private dialogueBox: DialogueBoxUI;
   private fadeOverlay: HTMLDivElement;
@@ -147,6 +149,7 @@ export class Game {
     this.titleScreen = new TitleScreen();
     this.worldMapUI = new WorldMapUI(this.worldMap);
     this.formationUI = new FormationUI();
+    this.unitsScreen = new UnitsScreen();
     this.battleResultsUI = new BattleResults();
     this.dialogueBox = new DialogueBoxUI();
     this.fadeOverlay = createFadeOverlay();
@@ -462,6 +465,25 @@ export class Game {
         this.worldMapUI.hide();
         this.showWorldMap();
       }
+    });
+
+    // World map: Units button
+    this.worldMapUI.setOnUnits(() => {
+      if (!this.gameState) return;
+      audio.playSfx('confirm');
+      this.transitionTo('units', () => {
+        this.worldMapUI.hide();
+        this.unitsScreen.show(this.gameState!);
+      });
+    });
+
+    // Units screen: Back button
+    this.unitsScreen.setOnBack(() => {
+      audio.playSfx('cancel');
+      this.transitionTo('world_map', () => {
+        this.unitsScreen.hide();
+        this.showWorldMap();
+      });
     });
 
     // Formation
