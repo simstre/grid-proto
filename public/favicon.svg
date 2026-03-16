@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- 8-bit sword favicon -->
+  <!-- Blade -->
+  <rect x="7" y="1" width="2" height="2" fill="#c0c8d8"/>
+  <rect x="7" y="3" width="2" height="2" fill="#a8b0c0"/>
+  <rect x="7" y="5" width="2" height="2" fill="#9098a8"/>
+  <rect x="7" y="7" width="2" height="2" fill="#8890a0"/>
+  <!-- Highlight edge -->
+  <rect x="7" y="1" width="1" height="8" fill="#d8e0f0"/>
+  <!-- Guard -->
+  <rect x="5" y="9" width="6" height="2" fill="#c8a040"/>
+  <rect x="5" y="9" width="6" height="1" fill="#e0c060"/>
+  <!-- Grip -->
+  <rect x="7" y="11" width="2" height="3" fill="#604020"/>
+  <rect x="7" y="11" width="1" height="3" fill="#785028"/>
+  <!-- Pommel -->
+  <rect x="7" y="14" width="2" height="1" fill="#c8a040"/>
+</svg>
