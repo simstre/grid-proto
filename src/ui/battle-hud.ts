@@ -55,12 +55,12 @@ export class BattleHUD {
 
   constructor(overlay: HTMLElement) {
     this.container = document.createElement('div');
-    this.container.style.cssText = 'width:100%;height:100%;position:relative;';
+    this.container.style.cssText = 'width:100%;height:100%;position:relative;pointer-events:none;';
 
     // ─── Action Menu (bottom-left, FFT command window) ───
     this.actionMenu = document.createElement('div');
     this.actionMenu.style.cssText = `
-      position:absolute;bottom:24px;left:24px;
+      position:absolute;bottom:24px;left:24px;pointer-events:auto;
       ${PANEL_STYLE}
       padding:8px 6px;min-width:160px;display:none;
     `;
@@ -69,7 +69,7 @@ export class BattleHUD {
     // ─── Unit Info Panel (top-left, FFT status panel) ───
     this.unitInfo = document.createElement('div');
     this.unitInfo.style.cssText = `
-      position:absolute;top:16px;left:16px;
+      position:absolute;top:16px;left:16px;pointer-events:auto;
       ${PANEL_STYLE}
       padding:10px 14px;min-width:200px;display:none;
     `;
@@ -78,7 +78,7 @@ export class BattleHUD {
     // ─── Turn Order (top-right) ───
     this.turnOrder = document.createElement('div');
     this.turnOrder.style.cssText = `
-      position:absolute;top:16px;right:16px;
+      position:absolute;top:16px;right:16px;pointer-events:auto;
       ${PANEL_STYLE}
       padding:8px 12px;min-width:120px;font-size:11px;
     `;
@@ -87,7 +87,7 @@ export class BattleHUD {
     // ─── Phase Indicator (top-center) ───
     this.phaseIndicator = document.createElement('div');
     this.phaseIndicator.style.cssText = `
-      position:absolute;top:16px;left:50%;transform:translateX(-50%);
+      position:absolute;top:16px;left:50%;transform:translateX(-50%);pointer-events:auto;
       ${PANEL_STYLE}
       padding:5px 20px;font-size:12px;text-transform:uppercase;letter-spacing:3px;
     `;
@@ -96,7 +96,7 @@ export class BattleHUD {
     // ─── Tile Info (bottom-right) ───
     this.tileInfo = document.createElement('div');
     this.tileInfo.style.cssText = `
-      position:absolute;bottom:24px;right:24px;
+      position:absolute;bottom:24px;right:24px;pointer-events:auto;
       ${PANEL_STYLE}
       padding:8px 12px;font-size:11px;min-width:140px;
     `;
@@ -105,7 +105,7 @@ export class BattleHUD {
     // ─── Target Info (bottom-center, shows when hovering enemy) ───
     this.targetInfo = document.createElement('div');
     this.targetInfo.style.cssText = `
-      position:absolute;bottom:24px;left:50%;transform:translateX(-50%);
+      position:absolute;bottom:24px;left:50%;transform:translateX(-50%);pointer-events:auto;
       ${PANEL_STYLE}
       padding:8px 14px;font-size:12px;display:none;
     `;
