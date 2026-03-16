@@ -60,6 +60,72 @@ const HARDCODED_FRAMES: Record<string, DirectionFrames> = {
     east:  { x: 166, y: 4, w: 20, h: 32 },
     north: { x: 198, y: 4, w: 20, h: 33 },
   },
+  'chemist': {
+    south: { x: 39, y: 5, w: 20, h: 36 },
+    west:  { x: 105, y: 5, w: 19, h: 35 },
+    east:  { x: 166, y: 5, w: 21, h: 33 },
+    north: { x: 199, y: 5, w: 20, h: 34 },
+  },
+  'monk': {
+    south: { x: 42, y: 5, w: 18, h: 37 },
+    west:  { x: 106, y: 5, w: 18, h: 36 },
+    east:  { x: 169, y: 5, w: 17, h: 34 },
+    north: { x: 202, y: 5, w: 16, h: 34 },
+  },
+  'thief': {
+    south: { x: 40, y: 6, w: 20, h: 35 },
+    west:  { x: 106, y: 6, w: 18, h: 35 },
+    east:  { x: 170, y: 6, w: 19, h: 33 },
+    north: { x: 202, y: 6, w: 18, h: 34 },
+  },
+  'time-mage': {
+    south: { x: 41, y: 3, w: 18, h: 37 },
+    west:  { x: 104, y: 4, w: 18, h: 35 },
+    east:  { x: 167, y: 3, w: 19, h: 35 },
+    north: { x: 200, y: 3, w: 17, h: 35 },
+  },
+  'summoner': {
+    south: { x: 38, y: 5, w: 21, h: 34 },
+    west:  { x: 102, y: 4, w: 21, h: 34 },
+    east:  { x: 167, y: 5, w: 19, h: 32 },
+    north: { x: 199, y: 5, w: 18, h: 32 },
+  },
+  'geomancer': {
+    south: { x: 42, y: 6, w: 18, h: 35 },
+    west:  { x: 107, y: 6, w: 18, h: 34 },
+    east:  { x: 169, y: 6, w: 18, h: 32 },
+    north: { x: 203, y: 6, w: 16, h: 34 },
+  },
+  'dragoon': {
+    south: { x: 39, y: 5, w: 21, h: 38 },
+    west:  { x: 104, y: 5, w: 21, h: 37 },
+    east:  { x: 166, y: 5, w: 24, h: 35 },
+    north: { x: 201, y: 5, w: 19, h: 35 },
+  },
+  'samurai': {
+    south: { x: 42, y: 5, w: 22, h: 36 },
+    west:  { x: 105, y: 5, w: 22, h: 34 },
+    east:  { x: 171, y: 5, w: 18, h: 32 },
+    north: { x: 204, y: 5, w: 17, h: 34 },
+  },
+  'ninja': {
+    south: { x: 41, y: 4, w: 19, h: 35 },
+    west:  { x: 107, y: 4, w: 17, h: 34 },
+    east:  { x: 168, y: 4, w: 19, h: 33 },
+    north: { x: 202, y: 4, w: 16, h: 34 },
+  },
+  'oracle': {
+    south: { x: 38, y: 1, w: 19, h: 37 },
+    west:  { x: 102, y: 2, w: 18, h: 35 },
+    east:  { x: 166, y: 1, w: 17, h: 34 },
+    north: { x: 198, y: 1, w: 17, h: 35 },
+  },
+  'mediator': {
+    south: { x: 42, y: 5, w: 19, h: 35 },
+    west:  { x: 106, y: 5, w: 20, h: 35 },
+    east:  { x: 170, y: 5, w: 20, h: 32 },
+    north: { x: 203, y: 5, w: 18, h: 33 },
+  },
 };
 
 // ─── State ───
