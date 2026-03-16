@@ -1,6 +1,6 @@
 # Grid Proto
 
-A tactical RPG prototype inspired by classic isometric strategy games like Final Fantasy Tactics.
+A tactical RPG prototype inspired by classic isometric strategy games.
 
 ## Features
 
