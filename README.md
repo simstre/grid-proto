@@ -2,6 +2,8 @@
 
 A tactical RPG prototype inspired by classic isometric strategy games.
 
+**Play now:** https://grid-proto-taupe.vercel.app
+
 ## Features
 
 - Isometric tile-based battle system with height and terrain
