@@ -581,68 +581,88 @@ export class UnitsScreen {
       chart.appendChild(node);
     }
 
-    // Draw connection arrows
-    const allJobIds = Object.keys(JOBS) as JobId[];
-    for (const jobId of allJobIds) {
-      const job = JOBS[jobId];
-      const to = posMap.get(jobId);
-      if (!to || !job.prerequisites.length) continue;
+    // Draw connection arrows — only DIRECT single-step edges in the tree.
+    // Advanced jobs with multi-prerequisites show requirements in tooltip
+    // but don't draw crossing arrows across the whole chart.
+    type Edge = [string, string, number]; // [fromJobId, toJobId, requiredLevel]
+    const directEdges: Edge[] = [
+      // Physical branch
+      ['squire', 'knight', 2],
+      ['squire', 'archer', 2],
+      ['knight', 'monk', 2],
+      ['archer', 'thief', 2],
+      ['monk', 'geomancer', 3],
+      ['thief', 'dragoon', 3],
+      // Magical branch
+      ['chemist', 'whiteMage', 2],
+      ['chemist', 'blackMage', 2],
+      ['whiteMage', 'timeMage', 2],
+      ['whiteMage', 'oracle', 3],
+      ['timeMage', 'summoner', 2],
+      ['oracle', 'mediator', 2],
+      // Advanced (show primary prerequisite arrow only)
+      ['geomancer', 'samurai', 4],
+      ['dragoon', 'ninja', 3],
+      ['geomancer', 'dancer', 4],
+      ['summoner', 'bard', 4],
+      ['oracle', 'calculator', 3],
+      // Mime: show arrows from its two "branch tips"
+      ['geomancer', 'mime', 4],
+      ['summoner', 'mime', 4],
+    ];
 
-      for (const prereq of job.prerequisites) {
-        const from = posMap.get(prereq.jobId);
-        if (!from) continue;
+    for (const [fromId, toId, reqLevel] of directEdges) {
+      const from = posMap.get(fromId);
+      const to = posMap.get(toId);
+      if (!from || !to) continue;
 
-        const isUnlocked = canUnlockJob(jobId, unit.jobJP);
-        const prereqMet = (unit.jobJP[prereq.jobId] ?? 0) >= (JP_LEVEL_THRESHOLDS[prereq.level - 1] ?? 0);
+      const prereqJP = unit.jobJP[fromId as JobId] ?? 0;
+      const prereqMet = prereqJP >= (JP_LEVEL_THRESHOLDS[reqLevel - 1] ?? 0);
+      const color = prereqMet ? '#4a8a4a' : '#333344';
 
-        // Arrow color: green if prerequisite met, dim if not
-        const color = prereqMet ? '#4a8a4a' : '#333344';
+      // Draw line
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', String(from.cx));
+      line.setAttribute('y1', String(from.cy));
+      line.setAttribute('x2', String(to.cx));
+      line.setAttribute('y2', String(to.cy));
+      line.setAttribute('stroke', color);
+      line.setAttribute('stroke-width', prereqMet ? '2' : '1');
+      line.setAttribute('stroke-dasharray', prereqMet ? '' : '4,3');
+      svg.appendChild(line);
 
-        // Draw line
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', String(from.cx));
-        line.setAttribute('y1', String(from.cy));
-        line.setAttribute('x2', String(to.cx));
-        line.setAttribute('y2', String(to.cy));
-        line.setAttribute('stroke', color);
-        line.setAttribute('stroke-width', prereqMet ? '2' : '1');
-        line.setAttribute('stroke-dasharray', prereqMet ? '' : '4,3');
-        svg.appendChild(line);
+      // Arrowhead
+      const dx = to.cx - from.cx;
+      const dy = to.cy - from.cy;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 1) continue;
+      const ux = dx / len;
+      const uy = dy / len;
+      const tipX = to.cx - ux * (NODE_W / 2 + 2);
+      const tipY = to.cy - uy * (NODE_H / 2 + 2);
+      const arrSize = 6;
+      const px = -uy * arrSize;
+      const py = ux * arrSize;
 
-        // Arrowhead
-        const dx = to.cx - from.cx;
-        const dy = to.cy - from.cy;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len < 1) continue;
-        const ux = dx / len;
-        const uy = dy / len;
-        // Arrow tip: stop at node edge
-        const tipX = to.cx - ux * (NODE_W / 2 + 2);
-        const tipY = to.cy - uy * (NODE_H / 2 + 2);
-        const arrSize = 6;
-        const px = -uy * arrSize;
-        const py = ux * arrSize;
+      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      arrow.setAttribute('points',
+        `${tipX},${tipY} ${tipX - ux * arrSize + px},${tipY - uy * arrSize + py} ${tipX - ux * arrSize - px},${tipY - uy * arrSize - py}`
+      );
+      arrow.setAttribute('fill', color);
+      svg.appendChild(arrow);
 
-        const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-        arrow.setAttribute('points',
-          `${tipX},${tipY} ${tipX - ux * arrSize + px},${tipY - uy * arrSize + py} ${tipX - ux * arrSize - px},${tipY - uy * arrSize - py}`
-        );
-        arrow.setAttribute('fill', color);
-        svg.appendChild(arrow);
-
-        // Level requirement label on the line
-        const midX = (from.cx + to.cx) / 2;
-        const midY = (from.cy + to.cy) / 2;
-        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        label.setAttribute('x', String(midX));
-        label.setAttribute('y', String(midY - 4));
-        label.setAttribute('text-anchor', 'middle');
-        label.setAttribute('fill', prereqMet ? '#6aaa6a' : '#555');
-        label.setAttribute('font-size', '7');
-        label.setAttribute('font-family', "'Press Start 2P', monospace");
-        label.textContent = `Lv${prereq.level}`;
-        svg.appendChild(label);
-      }
+      // Level requirement label
+      const midX = (from.cx + to.cx) / 2;
+      const midY = (from.cy + to.cy) / 2;
+      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      label.setAttribute('x', String(midX));
+      label.setAttribute('y', String(midY - 4));
+      label.setAttribute('text-anchor', 'middle');
+      label.setAttribute('fill', prereqMet ? '#6aaa6a' : '#555');
+      label.setAttribute('font-size', '7');
+      label.setAttribute('font-family', "'Press Start 2P', monospace");
+      label.textContent = `Lv${reqLevel}`;
+      svg.appendChild(label);
     }
   }
 
