@@ -148,6 +148,20 @@ export class TitleScreen {
       <div><span style="color:${UI.textBright}">M</span> <span style="color:${UI.textDim}">- Toggle mute</span></div>
     `;
     this.container.appendChild(this.controlsPanel);
+
+    // Privacy & contact link
+    const privacy = document.createElement('a');
+    privacy.href = '/privacy.html';
+    privacy.textContent = 'Privacy & Contact';
+    privacy.style.cssText = `
+      position: absolute;
+      bottom: 16px;
+      font-size: 8px;
+      color: ${UI.textDim};
+      text-decoration: none;
+      letter-spacing: 1px;
+    `;
+    this.container.appendChild(privacy);
   }
 
   hide(): void {
